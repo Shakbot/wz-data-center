@@ -110,12 +110,12 @@ async function fetchMatchDetail(matchId, domain) {
   const detail = await fetch5eJson(`/v0/mars/api/csgo/data/player_match_info/${encodeURIComponent(matchId)}/${encodeURIComponent(domain)}`);
   const rowsWithTeam = (rows, fallbackTeam = "") => (Array.isArray(rows) ? rows : []).map((row) => ({ ...row, _fallbackTeam: fallbackTeam }));
   const scoreboardRows = [
+    ...rowsWithTeam(detail.user_match_data),
+    ...rowsWithTeam(detail.players),
     ...rowsWithTeam(detail.group1_user_match_data, "1"),
     ...rowsWithTeam(detail.group2_user_match_data, "2"),
     ...rowsWithTeam(detail.ct_user_match_data, "1"),
     ...rowsWithTeam(detail.t_user_match_data, "2"),
-    ...rowsWithTeam(detail.user_match_data),
-    ...rowsWithTeam(detail.players),
   ];
   const domainOf = (row) => String(readField(row, ["domain", "user.domain", "user_info.domain", "player.domain", "player_info.domain"]) || "").trim();
   const exact = scoreboardRows.find((row) => domainOf(row) === domain);
@@ -196,7 +196,7 @@ export async function onRequestPost({ request, env }) {
     const page = Math.max(1, Math.min(5, Number(body.page || 1)));
     const listData = await fetch5eJson(`/v0/mars/api/csgo/match_data/match_list?domain=${encodeURIComponent(domain)}&match_type=&time=&date_time=0&map_name=&page=${page}`);
     const matches = listData.match_list || [];
-    const existingByMatchId = new Map(state.records.map((record) => [
+    const existingByMatchId = new Map(state.records.filter((record) => record.userIdentityCode === identityCode).map((record) => [
       record.fiveE?.matchId || (String(record.id).startsWith("5e-") ? record.id.split("-").slice(1, -1).join("-") : ""),
       record,
     ]));
@@ -206,21 +206,25 @@ export async function onRequestPost({ request, env }) {
     for (const item of matches.slice(0, 20)) {
       if (!item.match_id) continue;
       const existing = existingByMatchId.get(item.match_id);
+      const detail = await fetchMatchDetail(item.match_id, domain).catch(() => null);
       if (existing) {
-        existing.fiveE = {
-          ...(existing.fiveE || {}),
-          swingScore: extractSwingScore(item, existing.fiveE),
-          matchName: item.match_name,
-          matchType: item.match_type,
-          map: item.map,
-          mapName: item.map_name || item.map_desc,
-          isWin: String(item.is_win) === "1",
-          endTime: item.end_time || existing.fiveE?.endTime || "",
-        };
+        const next = buildRecord(state, item, detail, identityCode);
+        Object.assign(existing, {
+          date: next.date,
+          rating: next.rating,
+          rws: next.rws,
+          adr: next.adr,
+          kast: next.kast,
+          headshotRate: next.headshotRate,
+          seasonId: next.seasonId,
+          source: existing.source || "5e-sync",
+          fiveE: { ...(existing.fiveE || {}), ...next.fiveE },
+          updatedBy: "5e-sync",
+          updatedAt: new Date().toISOString(),
+        });
         updated += 1;
         continue;
       }
-      const detail = await fetchMatchDetail(item.match_id, domain).catch(() => null);
       const record = buildRecord(state, item, detail, identityCode);
       state.records.push(record);
       existingByMatchId.set(item.match_id, record);

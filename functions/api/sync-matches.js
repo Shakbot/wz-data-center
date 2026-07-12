@@ -118,6 +118,9 @@ function rowsWithTeam(rows, fallbackTeam = "") {
 }
 
 function readScoreboardRows(detail) {
+  const fullRows = rowsWithTeam(detail.user_match_data);
+  if (fullRows.length) return fullRows;
+
   const groupedRows = [
     ...rowsWithTeam(detail.group1_user_match_data, "1"),
     ...rowsWithTeam(detail.group2_user_match_data, "2"),
@@ -129,9 +132,6 @@ function readScoreboardRows(detail) {
     ...rowsWithTeam(detail.t_user_match_data, "2"),
   ];
   if (sideRows.length) return sideRows;
-
-  const directRows = rowsWithTeam(detail.user_match_data);
-  if (directRows.length) return directRows;
 
   return rowsWithTeam(detail.players);
 }
@@ -335,8 +335,8 @@ function buildMatchRecord(state, listItem, detail, indexes) {
   const players = dedupePlayers(readScoreboardRows(detail).map((row) => buildPlayer(row, indexes)));
   const recognizedMemberCodes = [...new Set(players.filter((player) => player.memberCode).map((player) => player.memberCode))];
   const trainingMemberCodes = recognizedMemberCodes.filter((code) => isTrainingEligible(state, code));
-  const scoreA = firstNumber(main, ["group1_all_score", "group1_score", "team1_score", "score1", "a_score"], firstNumber(listItem, ["group1_all_score", "group1_score", "team1_score", "score1", "a_score"]));
-  const scoreB = firstNumber(main, ["group2_all_score", "group2_score", "team2_score", "score2", "b_score"], firstNumber(listItem, ["group2_all_score", "group2_score", "team2_score", "score2", "b_score"]));
+  const group1Score = firstNumber(main, ["group1_all_score", "group1_score", "team1_score", "score1", "a_score"], firstNumber(listItem, ["group1_all_score", "group1_score", "team1_score", "score1", "a_score"]));
+  const group2Score = firstNumber(main, ["group2_all_score", "group2_score", "team2_score", "score2", "b_score"], firstNumber(listItem, ["group2_all_score", "group2_score", "team2_score", "score2", "b_score"]));
   const record = {
     matchId: listItem.match_id,
     date,
@@ -345,8 +345,8 @@ function buildMatchRecord(state, listItem, detail, indexes) {
     mapName: String(main.map_name || main.map_desc || listItem.map_name || listItem.map_desc || ""),
     matchName: String(main.match_name || listItem.match_name || ""),
     matchType: String(main.match_type || listItem.match_type || ""),
-    scoreA,
-    scoreB,
+    scoreA: group2Score,
+    scoreB: group1Score,
     seasonId: season ? season.id : "",
     recognizedMemberCodes,
     isTrainingCandidate: trainingMemberCodes.length >= 3,
@@ -359,11 +359,39 @@ function buildMatchRecord(state, listItem, detail, indexes) {
   return record;
 }
 
+function matchSeedFromRecord(matchRecord, seeds) {
+  const memberSeed = seeds.find((seed) => (matchRecord.recognizedMemberCodes || []).includes(seed.user.identityCode));
+  const playerDomain = (matchRecord.players || []).find((player) => player.domain)?.domain || "";
+  const domain = memberSeed?.profile?.domain || playerDomain || seeds[0]?.profile?.domain || "";
+  if (!matchRecord.matchId || !domain) return null;
+  return {
+    domain,
+    item: {
+      match_id: matchRecord.matchId,
+      end_time: matchRecord.endTime || "",
+      start_time: matchRecord.startTime || "",
+      map: matchRecord.map || "",
+      map_name: matchRecord.mapName || "",
+      map_desc: matchRecord.mapName || "",
+      match_name: matchRecord.matchName || "",
+      match_type: matchRecord.matchType || "",
+    },
+    existing: true,
+  };
+}
+
 function upsertPersonalRecords(state, matchRecord) {
-  const existing = new Map(state.records.map((record) => [`${record.fiveE?.matchRecordId || record.fiveE?.matchId || ""}:${record.userIdentityCode}`, record]));
+  const existing = new Map();
+  for (const record of state.records) {
+    for (const matchKey of [record.fiveE?.matchRecordId, record.fiveE?.fingerprint, record.fiveE?.matchId].filter(Boolean)) {
+      existing.set(`${matchKey}:${record.userIdentityCode}`, record);
+    }
+  }
   for (const player of matchRecord.players) {
     if (!player.memberCode) continue;
     const key = `${matchRecord.id}:${player.memberCode}`;
+    const matchIdKey = `${matchRecord.matchId}:${player.memberCode}`;
+    const fingerprintKey = `${matchRecord.fingerprint}:${player.memberCode}`;
     const nextFiveE = {
       matchRecordId: matchRecord.id,
       matchId: matchRecord.matchId,
@@ -372,14 +400,14 @@ function upsertPersonalRecords(state, matchRecord) {
       matchType: matchRecord.matchType,
       map: matchRecord.map,
       mapName: matchRecord.mapName,
-      isWin: matchRecord.scoreA !== matchRecord.scoreB ? player.team === (matchRecord.scoreA > matchRecord.scoreB ? "1" : "2") : false,
+      isWin: matchRecord.scoreA !== matchRecord.scoreB ? player.team === (matchRecord.scoreA > matchRecord.scoreB ? "2" : "1") : false,
       swingScore: player.swingScore,
       kill: player.kill,
       death: player.death,
       assist: player.assist,
       endTime: matchRecord.endTime,
     };
-    const current = existing.get(key);
+    const current = existing.get(key) || existing.get(matchIdKey) || existing.get(fingerprintKey);
     if (current) {
       Object.assign(current, {
         date: matchRecord.date,
@@ -414,11 +442,13 @@ function upsertPersonalRecords(state, matchRecord) {
     };
     state.records.push(created);
     existing.set(key, created);
+    existing.set(matchIdKey, created);
+    existing.set(fingerprintKey, created);
   }
 }
 
 function normalizeExistingMatches(state, indexes) {
-  const byFingerprint = new Map();
+  const byMatch = new Map();
   for (const record of state.matchRecords || []) {
     record.players = dedupePlayers((record.players || []).map((player) => {
       if (player.memberCode) return player;
@@ -434,30 +464,68 @@ function normalizeExistingMatches(state, indexes) {
     record.isTrainingCandidate = record.recognizedMemberCodes.filter((code) => isTrainingEligible(state, code)).length >= 3;
     record.fingerprint = record.fingerprint || matchFingerprint(record);
     record.id = record.id || `match-${record.fingerprint}`;
-    const current = byFingerprint.get(record.fingerprint);
+    const key = record.matchId || record.fingerprint;
+    const current = byMatch.get(key);
     if (!current || (record.players || []).length > (current.players || []).length) {
-      byFingerprint.set(record.fingerprint, record);
+      byMatch.set(key, record);
     }
   }
-  state.matchRecords = [...byFingerprint.values()];
+  state.matchRecords = [...byMatch.values()];
 }
 
 function normalizeExistingPersonalRecords(state) {
   const byMatchAndUser = new Map();
   const passthrough = [];
+  const mergeTrainingFlags = (target, source) => {
+    if (source.trainingIncluded) target.trainingIncluded = true;
+    if (source.trainingMatchId && !target.trainingMatchId) target.trainingMatchId = source.trainingMatchId;
+    if (source.trainingPromotedAt && !target.trainingPromotedAt) target.trainingPromotedAt = source.trainingPromotedAt;
+  };
   for (const record of state.records || []) {
-    const matchKey = record.fiveE?.matchRecordId || record.fiveE?.fingerprint || record.fiveE?.matchId || "";
+    const matchKey = record.fiveE?.matchId || record.fiveE?.matchRecordId || record.fiveE?.fingerprint || "";
     if (!matchKey || !record.userIdentityCode) {
       passthrough.push(record);
       continue;
     }
     const key = `${matchKey}:${record.userIdentityCode}`;
     const current = byMatchAndUser.get(key);
-    if (!current || String(record.updatedAt || record.createdAt || "") > String(current.updatedAt || current.createdAt || "")) {
+    if (!current) {
       byMatchAndUser.set(key, record);
+      continue;
     }
+    const next = String(record.updatedAt || record.createdAt || "") > String(current.updatedAt || current.createdAt || "")
+      ? record
+      : current;
+    mergeTrainingFlags(next, current);
+    mergeTrainingFlags(next, record);
+    byMatchAndUser.set(key, next);
   }
   state.records = [...passthrough, ...byMatchAndUser.values()];
+}
+
+function normalizeTrainingIncludedRecords(state) {
+  const byMatchAndUser = new Map();
+  for (const record of state.records || []) {
+    if (!record.trainingIncluded || !record.userIdentityCode) continue;
+    const matchKey = record.fiveE?.matchId || record.trainingMatchId || record.fiveE?.matchRecordId || record.fiveE?.fingerprint || "";
+    if (!matchKey) continue;
+    byMatchAndUser.set(`${matchKey}:${record.userIdentityCode}`, record);
+  }
+  for (const record of state.records || []) {
+    if (!record.userIdentityCode) continue;
+    const keys = [
+      record.fiveE?.matchId,
+      record.trainingMatchId,
+      record.fiveE?.matchRecordId,
+      record.fiveE?.fingerprint,
+    ].filter(Boolean).map((matchKey) => `${matchKey}:${record.userIdentityCode}`);
+    const promoted = keys.map((key) => byMatchAndUser.get(key)).find(Boolean);
+    if (promoted?.trainingIncluded) {
+      record.trainingIncluded = true;
+      record.trainingMatchId = record.trainingMatchId || promoted.trainingMatchId;
+      record.trainingPromotedAt = record.trainingPromotedAt || promoted.trainingPromotedAt;
+    }
+  }
 }
 
 export async function onRequestPost({ request, env }) {
@@ -500,34 +568,46 @@ export async function onRequestPost({ request, env }) {
     const indexes = buildMemberIndexes(state.users);
     normalizeExistingMatches(state, indexes);
     normalizeExistingPersonalRecords(state);
-    for (const matchRecord of state.matchRecords) upsertPersonalRecords(state, matchRecord);
-    normalizeExistingPersonalRecords(state);
+    for (const matchRecord of state.matchRecords) {
+      const existingSeed = matchSeedFromRecord(matchRecord, seeds);
+      if (existingSeed && !matchSeeds.has(matchRecord.matchId)) matchSeeds.set(matchRecord.matchId, existingSeed);
+    }
+    normalizeTrainingIncludedRecords(state);
     const existingByFingerprint = new Map(state.matchRecords.map((record) => [record.fingerprint || matchFingerprint(record), record]));
+    const existingByMatchId = new Map(state.matchRecords.map((record) => [record.matchId, record]).filter(([matchId]) => matchId));
     let created = 0;
     let updated = 0;
+    let refreshedExisting = 0;
 
     for (const [matchId, seed] of matchSeeds.entries()) {
       const detail = await fetch5eJson(`/v0/mars/api/csgo/data/player_match_info/${encodeURIComponent(matchId)}/${encodeURIComponent(seed.domain)}`).catch(() => null);
       if (!detail) continue;
       const next = buildMatchRecord(state, seed.item, detail, indexes);
-      const existing = existingByFingerprint.get(next.fingerprint);
+      const existing = existingByMatchId.get(next.matchId) || existingByFingerprint.get(next.fingerprint);
       if (existing) {
         Object.assign(existing, next, { isTrainingConfirmed: existing.isTrainingConfirmed || false });
+        existingByFingerprint.set(existing.fingerprint, existing);
+        existingByMatchId.set(existing.matchId, existing);
         updated += 1;
+        if (seed.existing) refreshedExisting += 1;
         upsertPersonalRecords(state, existing);
       } else {
         state.matchRecords.push(next);
         existingByFingerprint.set(next.fingerprint, next);
+        existingByMatchId.set(next.matchId, next);
         created += 1;
         upsertPersonalRecords(state, next);
       }
     }
+    normalizeTrainingIncludedRecords(state);
+    normalizeExistingPersonalRecords(state);
 
     await writeState(env.DB, state);
     return json({
       ok: true,
       seedMembers: seeds.length,
       scannedMatches: matchSeeds.size,
+      refreshedExisting,
       created,
       updated,
       state,

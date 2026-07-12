@@ -439,8 +439,42 @@ function isTrainingStatRecord(record) {
   return record.trainingIncluded === true || !isFiveERecord(record);
 }
 
+function trainingRecordKey(record) {
+  if (record.fiveE?.matchId) return `5e:${record.fiveE.matchId}:${record.userIdentityCode}`;
+  if (record.trainingMatchId) return `training:${record.trainingMatchId}:${record.userIdentityCode}`;
+  return `manual:${record.id || `${record.userIdentityCode}:${record.date}:${record.matchOrder}`}`;
+}
+
+function newerRecord(a, b) {
+  return String(a.updatedAt || a.createdAt || "") >= String(b.updatedAt || b.createdAt || "") ? a : b;
+}
+
+function mergeTrainingFlags(target, source) {
+  if (source.trainingIncluded) target.trainingIncluded = true;
+  if (source.trainingMatchId && !target.trainingMatchId) target.trainingMatchId = source.trainingMatchId;
+  if (source.trainingPromotedAt && !target.trainingPromotedAt) target.trainingPromotedAt = source.trainingPromotedAt;
+  return target;
+}
+
+function trainingStatRecords(records = data.records) {
+  const byKey = new Map();
+  for (const record of records.filter(isTrainingStatRecord)) {
+    const key = trainingRecordKey(record);
+    const current = byKey.get(key);
+    if (!current) {
+      byKey.set(key, { ...record });
+      continue;
+    }
+    const next = { ...newerRecord(current, record) };
+    mergeTrainingFlags(next, current);
+    mergeTrainingFlags(next, record);
+    byKey.set(key, next);
+  }
+  return [...byKey.values()];
+}
+
 function userTrainingRecords(code) {
-  return userRecords(code).filter(isTrainingStatRecord);
+  return trainingStatRecords().filter((record) => record.userIdentityCode === code);
 }
 
 function unreadAnnouncements(user = currentUser()) {
@@ -757,8 +791,8 @@ function matchOutcome(match) {
   const scoreA = Number(match.scoreA);
   const scoreB = Number(match.scoreB);
   const hasScores = Number.isFinite(scoreA) && Number.isFinite(scoreB);
-  const ourScore = ourTeam === "2" ? scoreB : scoreA;
-  const theirScore = ourTeam === "2" ? scoreA : scoreB;
+  const ourScore = ourTeam === "2" ? scoreA : scoreB;
+  const theirScore = ourTeam === "2" ? scoreB : scoreA;
   if (!ourTeam || !hasScores) {
     return { label: "待确认", className: "match-unknown", ourScore: match.scoreA ?? "-", theirScore: match.scoreB ?? "-", sideText: "阵营未识别" };
   }
@@ -788,7 +822,7 @@ function renderMatchDetail(matchId) {
           ${member ? `<br><span class="date-line">${escapeHtml(member.gameId)} · ${escapeHtml(member.identityCode)}</span>` : player.isOgCandidate ? `<br><span class="date-line">OG 候选</span>` : ""}
         </td>
         <td>${escapeHtml(teamLabel(player.team))}</td>
-        <td>${player.kill}/${player.death}/${player.assist}</td>
+        <td>${player.kill}/${player.assist}/${player.death}</td>
         <td>${Number(player.adr || 0).toFixed(1)}</td>
         <td>${Number(player.kast || 0).toFixed(2)}</td>
         <td>${Number(player.rws || 0).toFixed(2)}</td>
@@ -809,7 +843,7 @@ function renderMatchDetail(matchId) {
         </div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>玩家</th><th>阵营</th><th>K/D/A</th><th>ADR</th><th>KAST</th><th>RWS</th><th>Rating</th><th>评价</th></tr></thead>
+            <thead><tr><th>玩家</th><th>阵营</th><th>杀/助/死</th><th>ADR</th><th>KAST</th><th>RWS</th><th>Rating</th><th>评价</th></tr></thead>
             <tbody>${rows}</tbody>
           </table>
         </div>
@@ -850,16 +884,17 @@ function matchDetailPlayers(players) {
     const current = chosen.get(key);
     if (!current || Number(player.rating || 0) > Number(current.rating || 0)) chosen.set(key, player);
   }
-  const deduped = [...chosen.values()].sort((a, b) => Number(a.team || 0) - Number(b.team || 0) || Number(b.rating || 0) - Number(a.rating || 0));
-  const teamA = deduped.filter((player) => String(player.team) === "1").slice(0, 5);
-  const teamB = deduped.filter((player) => String(player.team) === "2").slice(0, 5);
+  const order = (team) => String(team) === "2" ? 1 : String(team) === "1" ? 2 : 3;
+  const deduped = [...chosen.values()].sort((a, b) => order(a.team) - order(b.team) || Number(b.rating || 0) - Number(a.rating || 0));
+  const teamA = deduped.filter((player) => String(player.team) === "2").slice(0, 5);
+  const teamB = deduped.filter((player) => String(player.team) === "1").slice(0, 5);
   const other = deduped.filter((player) => String(player.team) !== "1" && String(player.team) !== "2").slice(0, Math.max(0, 10 - teamA.length - teamB.length));
   return [...teamA, ...teamB, ...other].slice(0, 10);
 }
 
 function teamLabel(team) {
-  if (String(team) === "1") return "Team A";
-  if (String(team) === "2") return "Team B";
+  if (String(team) === "2") return "Team A";
+  if (String(team) === "1") return "Team B";
   return team || "-";
 }
 
@@ -870,7 +905,7 @@ function renderDashboard() {
     <div class="section">
       <div class="grid three">
         ${summaryCard(t("memberTotal"), activeMembers().length)}
-        ${summaryCard(t("recordTotal"), data.records.filter(isTrainingStatRecord).length)}
+        ${summaryCard(t("recordTotal"), trainingStatRecords().length)}
         ${summaryCard(t("currentSeason"), season ? `${escapeHtml(season.shortName)} · ${escapeHtml(season.name)}` : "N/A")}
       </div>
       <div class="panel">
@@ -1144,7 +1179,7 @@ function render5ePanel(member, canManage) {
             <td>${Number(record.rws).toFixed(2)}</td>
             <td>${Number(record.adr).toFixed(1)}</td>
             <td>${record.kast != null ? Number(record.kast).toFixed(2) : "N/A"}</td>
-            <td>${meta.kill ?? "N/A"} / ${meta.death ?? "N/A"} / ${meta.assist ?? "N/A"}</td>
+            <td>${meta.kill ?? "N/A"} / ${meta.assist ?? "N/A"} / ${meta.death ?? "N/A"}</td>
             <td>${meta.isWin ? "胜" : "负"}</td>
             <td><span class="rws-rank-badge ${horse.className}">${escapeHtml(horse.label)}</span><br><span class="date-line">${escapeHtml(horse.detail)}</span></td>
           </tr>
@@ -1162,7 +1197,7 @@ function render5ePanel(member, canManage) {
       </div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>日期 / 地图</th><th>Rating</th><th>RWS</th><th>ADR</th><th>KAST</th><th>K/D/A</th><th>结果</th><th>评价</th></tr></thead>
+          <thead><tr><th>日期 / 地图</th><th>Rating</th><th>RWS</th><th>ADR</th><th>KAST</th><th>杀/助/死</th><th>结果</th><th>评价</th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
       </div>
@@ -1395,7 +1430,7 @@ function selectedTrainingSeason() {
 }
 
 function trainingRecordsForSeason(user, season) {
-  const records = isAdmin(user) ? data.records.filter(isTrainingStatRecord) : userTrainingRecords(user.identityCode);
+  const records = isAdmin(user) ? trainingStatRecords() : userTrainingRecords(user.identityCode);
   if (!season) return records;
   return records.filter((record) => {
     const inSeason = record.seasonId === season.id || (dateValue(season.start) <= dateValue(record.date) && dateValue(record.date) <= dateValue(season.end));
@@ -2371,7 +2406,7 @@ async function syncAllMatches() {
     data = normalizeData(body.state);
     syncStatus = "";
     stopBusyTask(false);
-    alert(`对局同步完成：种子成员 ${body.seedMembers} 人，扫描 ${body.scannedMatches} 场，新增 ${body.created} 场，更新 ${body.updated} 场。`);
+    alert(`对局同步完成：种子成员 ${body.seedMembers} 人，扫描 ${body.scannedMatches} 场，新增 ${body.created} 场，更新 ${body.updated} 场，回源修复历史 ${body.refreshedExisting || 0} 场。`);
   } catch (error) {
     syncStatus = error.message;
     stopBusyTask(false);
