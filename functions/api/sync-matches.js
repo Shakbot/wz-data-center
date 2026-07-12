@@ -136,6 +136,14 @@ function readScoreboardRows(detail) {
   return rowsWithTeam(detail.players);
 }
 
+function readPlayerViewRows(detail) {
+  return {
+    full: rowsWithTeam(detail.user_match_data).length ? rowsWithTeam(detail.user_match_data) : readScoreboardRows(detail),
+    ct: rowsWithTeam(detail.ct_user_match_data),
+    t: rowsWithTeam(detail.t_user_match_data),
+  };
+}
+
 function compactKey(value) {
   return String(value || "")
     .trim()
@@ -328,11 +336,19 @@ function dedupePlayers(players) {
   return [...teamA, ...teamB, ...other].slice(0, 10);
 }
 
+function buildPlayerViews(detail, indexes) {
+  const rows = readPlayerViewRows(detail);
+  return Object.fromEntries(Object.entries(rows).map(([scope, scopeRows]) => {
+    return [scope, dedupePlayers(scopeRows.map((row) => buildPlayer(row, indexes)))];
+  }));
+}
+
 function buildMatchRecord(state, listItem, detail, indexes) {
   const main = detail.main || detail.match || {};
   const date = dateFromUnix(main.end_time || main.start_time || listItem.end_time || listItem.start_time);
   const season = findSeasonForDate(state, date);
-  const players = dedupePlayers(readScoreboardRows(detail).map((row) => buildPlayer(row, indexes)));
+  const playerViews = buildPlayerViews(detail, indexes);
+  const players = playerViews.full?.length ? playerViews.full : dedupePlayers(readScoreboardRows(detail).map((row) => buildPlayer(row, indexes)));
   const recognizedMemberCodes = [...new Set(players.filter((player) => player.memberCode).map((player) => player.memberCode))];
   const trainingMemberCodes = recognizedMemberCodes.filter((code) => isTrainingEligible(state, code));
   const group1Score = firstNumber(main, ["group1_all_score", "group1_score", "team1_score", "score1", "a_score"], firstNumber(listItem, ["group1_all_score", "group1_score", "team1_score", "score1", "a_score"]));
@@ -352,6 +368,7 @@ function buildMatchRecord(state, listItem, detail, indexes) {
     isTrainingCandidate: trainingMemberCodes.length >= 3,
     isTrainingConfirmed: false,
     players,
+    playerViews: { ...playerViews, full: players },
     syncedAt: new Date().toISOString(),
   };
   record.fingerprint = matchFingerprint(record);
@@ -447,26 +464,47 @@ function upsertPersonalRecords(state, matchRecord) {
   }
 }
 
+function normalizeStoredPlayer(player, indexes) {
+  if (player.memberCode) return player;
+  const member = recognizeMember({
+    domain: player.domain,
+    uuid: player.uuid,
+    username: player.nickname || player.name,
+    player_name: player.nickname || player.name,
+  }, indexes);
+  return member ? { ...player, memberCode: member.identityCode, isClubMember: true } : player;
+}
+
+function normalizeStoredPlayers(players, indexes) {
+  return dedupePlayers((Array.isArray(players) ? players : []).map((player) => normalizeStoredPlayer(player, indexes)));
+}
+
+function matchRecordCompleteness(record) {
+  const viewCount = Object.values(record.playerViews || {}).reduce((total, players) => {
+    return total + (Array.isArray(players) ? players.length : 0);
+  }, 0);
+  return ((record.players || []).length * 10) + Math.min(viewCount, 30);
+}
+
 function normalizeExistingMatches(state, indexes) {
   const byMatch = new Map();
   for (const record of state.matchRecords || []) {
-    record.players = dedupePlayers((record.players || []).map((player) => {
-      if (player.memberCode) return player;
-      const member = recognizeMember({
-        domain: player.domain,
-        uuid: player.uuid,
-        username: player.nickname || player.name,
-        player_name: player.nickname || player.name,
-      }, indexes);
-      return member ? { ...player, memberCode: member.identityCode, isClubMember: true } : player;
-    }));
+    record.players = normalizeStoredPlayers(record.players, indexes);
+    if (record.playerViews && typeof record.playerViews === "object") {
+      record.playerViews = Object.fromEntries(Object.entries(record.playerViews).map(([scope, players]) => {
+        return [scope, normalizeStoredPlayers(players, indexes)];
+      }));
+      if (!record.playerViews.full?.length && record.players.length) record.playerViews.full = record.players;
+    } else if (record.players.length) {
+      record.playerViews = { full: record.players };
+    }
     record.recognizedMemberCodes = [...new Set(record.players.filter((player) => player.memberCode).map((player) => player.memberCode))];
     record.isTrainingCandidate = record.recognizedMemberCodes.filter((code) => isTrainingEligible(state, code)).length >= 3;
     record.fingerprint = record.fingerprint || matchFingerprint(record);
     record.id = record.id || `match-${record.fingerprint}`;
     const key = record.matchId || record.fingerprint;
     const current = byMatch.get(key);
-    if (!current || (record.players || []).length > (current.players || []).length) {
+    if (!current || matchRecordCompleteness(record) > matchRecordCompleteness(current)) {
       byMatch.set(key, record);
     }
   }

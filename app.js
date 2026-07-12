@@ -179,6 +179,7 @@ let sidebarOpen = false;
 let booting = true;
 let syncStatus = "";
 let selectedMatchId = "";
+let selectedMatchScope = "full";
 let selectedRecordIds = new Set();
 let savingData = false;
 let saveQueue = Promise.resolve();
@@ -810,8 +811,10 @@ function matchOutcome(match) {
 function renderMatchDetail(matchId) {
   const match = (data.matchRecords || []).find((item) => item.id === matchId || item.matchId === matchId);
   if (!match) return "";
-  const players = matchDetailPlayers(match.players || []);
+  const scope = matchDetailScope(match);
+  const players = matchDetailPlayers(matchPlayersForScope(match, scope));
   const rwsRatings = matchRwsRatings(players);
+  const scopeTabs = renderMatchScopeTabs(match, scope);
   const rows = players.map((player) => {
     const member = player.memberCode ? userByCode(player.memberCode) : null;
     const rating = rwsRatings.get(player);
@@ -837,18 +840,63 @@ function renderMatchDetail(matchId) {
         <div class="panel-head">
           <div>
             <h3>${escapeHtml(match.mapName || match.map || "5E 对局")} · ${escapeHtml(match.scoreA ?? "-")} : ${escapeHtml(match.scoreB ?? "-")}</h3>
-            <div class="date-line">${escapeHtml(match.date || "")} · ${escapeHtml(match.matchName || "")} · Match ${escapeHtml(match.matchId)}</div>
+            <div class="date-line">${escapeHtml(match.date || "")} · ${escapeHtml(match.matchName || "")} · Match ${escapeHtml(match.matchId)} · ${escapeHtml(matchScopeLabel(scope))}</div>
           </div>
           <button class="icon-button" data-action="close-match-detail" aria-label="Close">×</button>
         </div>
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>玩家</th><th>阵营</th><th>杀/助/死</th><th>ADR</th><th>KAST</th><th>RWS</th><th>Rating</th><th>评价</th></tr></thead>
-            <tbody>${rows}</tbody>
-          </table>
+        <div class="match-detail-body">
+          <div class="table-wrap match-detail-table">
+            <table>
+              <thead><tr><th>玩家</th><th>阵营</th><th>杀/助/死</th><th>ADR</th><th>KAST</th><th>RWS</th><th>Rating</th><th>评价</th></tr></thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div>
+          ${scopeTabs}
         </div>
       </div>
     </div>
+  `;
+}
+
+function matchDetailScope(match) {
+  const scopes = matchAvailableScopes(match);
+  return scopes.includes(selectedMatchScope) ? selectedMatchScope : "full";
+}
+
+function matchAvailableScopes(match) {
+  return ["full", "ct", "t"].filter((scope) => matchPlayersForScope(match, scope).length);
+}
+
+function matchPlayersForScope(match, scope) {
+  if (scope === "full") return match.playerViews?.full?.length ? match.playerViews.full : (match.players || []);
+  return match.playerViews?.[scope] || [];
+}
+
+function matchScopeLabel(scope) {
+  if (scope === "ct") return "CT 半场";
+  if (scope === "t") return "T 半场";
+  return "全场";
+}
+
+function renderMatchScopeTabs(match, activeScope) {
+  const scopes = [
+    ["full", "全场", "ALL"],
+    ["ct", "CT 半场", "CT"],
+    ["t", "T 半场", "T"],
+  ];
+  return `
+    <aside class="match-scope-switcher" aria-label="对局数据视图">
+      ${scopes.map(([scope, label, mark]) => {
+        const count = matchPlayersForScope(match, scope).length;
+        return `
+          <button class="${activeScope === scope ? "active" : ""}" data-action="match-detail-scope" data-scope="${scope}" ${count ? "" : "disabled"} type="button">
+            <span>${escapeHtml(mark)}</span>
+            <strong>${escapeHtml(label)}</strong>
+            <em>${count ? `${count} 人` : "暂无"}</em>
+          </button>
+        `;
+      }).join("")}
+    </aside>
   `;
 }
 
@@ -2020,11 +2068,17 @@ document.addEventListener("click", async (event) => {
   if (action === "sync-all-matches") await syncAllMatches();
   if (action === "open-match-detail") {
     selectedMatchId = button.dataset.id;
+    selectedMatchScope = "full";
+    render();
+  }
+  if (action === "match-detail-scope") {
+    selectedMatchScope = button.dataset.scope || "full";
     render();
   }
   if (action === "close-match-detail") {
     if (button.classList.contains("modal-backdrop") && event.target !== button) return;
     selectedMatchId = "";
+    selectedMatchScope = "full";
     render();
   }
   if (action === "save-record") await saveRecord(button.dataset.id);
