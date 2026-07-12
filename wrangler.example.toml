@@ -1,0 +1,8 @@
+name = "wz-data-center"
+compatibility_date = "2026-07-10"
+pages_build_output_dir = "."
+
+[[d1_databases]]
+binding = "DB"
+database_name = "wz-data-center-db"
+database_id = "把你自己的 D1 database_id 填到这里"

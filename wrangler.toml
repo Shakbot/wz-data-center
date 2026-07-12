@@ -1,0 +1,8 @@
+name = "wz-data-center"
+compatibility_date = "2026-07-10"
+pages_build_output_dir = "."
+
+[[d1_databases]]
+binding = "DB"
+database_name = "wz-data-center-db"
+database_id = "d2273c1d-156f-4b68-b9df-8ad51eed8d13"
