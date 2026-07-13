@@ -429,7 +429,37 @@ function matchSeedFromRecord(matchRecord, seeds) {
       match_type: matchRecord.matchType || "",
     },
     existing: true,
+    domains: [domain],
   };
+}
+
+function addMatchSeed(matchSeeds, matchId, item, domain, extra = {}) {
+  if (!matchId || !domain) return;
+  const current = matchSeeds.get(matchId);
+  if (current) {
+    if (!current.domains.includes(domain)) current.domains.push(domain);
+    current.existing = current.existing || Boolean(extra.existing);
+    return;
+  }
+  matchSeeds.set(matchId, {
+    item,
+    domain,
+    domains: [domain],
+    ...extra,
+  });
+}
+
+async function fetchMatchDetailWithFallback(matchId, domains) {
+  const errors = [];
+  for (const domain of [...new Set(domains.filter(Boolean))]) {
+    try {
+      const detail = await fetch5eJson(`/v0/mars/api/csgo/data/player_match_info/${encodeURIComponent(matchId)}/${encodeURIComponent(domain)}`);
+      return { detail, domain, errors };
+    } catch (error) {
+      errors.push(`${domain}: ${error.message || String(error)}`);
+    }
+  }
+  return { detail: null, domain: "", errors };
 }
 
 function upsertPersonalRecords(state, matchRecord) {
@@ -616,7 +646,7 @@ export async function onRequestPost({ request, env }) {
     if (!isAdmin(actor)) return json({ error: "只有管理员可以一键同步全员对局。" }, 403);
 
     const body = await request.json().catch(() => ({}));
-    const pages = Math.max(1, Math.min(3, Number(body.pages || body.page || 3)));
+    const pages = Math.max(1, Math.min(5, Number(body.pages || body.page || 5)));
     normalizeUserAliases(state);
     const seeds = state.users
       .map((user) => ({ user, profile: parse5eProfile(user.fiveEProfileUrl, user.fiveEDomain) }))
@@ -624,12 +654,16 @@ export async function onRequestPost({ request, env }) {
     if (!seeds.length) return json({ error: "还没有成员绑定 5E 个人主页链接。" }, 400);
 
     const matchSeeds = new Map();
+    const listFailures = [];
     for (const seed of seeds) {
       for (let page = 1; page <= pages; page += 1) {
-        const listData = await fetch5eJson(`/v0/mars/api/csgo/match_data/match_list?domain=${encodeURIComponent(seed.profile.domain)}&match_type=&time=&date_time=0&map_name=&page=${page}`);
+        const listData = await fetch5eJson(`/v0/mars/api/csgo/match_data/match_list?domain=${encodeURIComponent(seed.profile.domain)}&match_type=&time=&date_time=0&map_name=&page=${page}`).catch((error) => {
+          listFailures.push({ domain: seed.profile.domain, page, error: error.message || String(error) });
+          return null;
+        });
+        if (!listData) continue;
         for (const item of (listData.match_list || []).slice(0, 20)) {
-          if (!item.match_id || matchSeeds.has(item.match_id)) continue;
-          matchSeeds.set(item.match_id, { item, domain: seed.profile.domain });
+          addMatchSeed(matchSeeds, item.match_id, item, seed.profile.domain);
         }
       }
       seed.user.fiveEDomain = seed.profile.domain;
@@ -645,7 +679,7 @@ export async function onRequestPost({ request, env }) {
     normalizeExistingPersonalRecords(state);
     for (const matchRecord of state.matchRecords) {
       const existingSeed = matchSeedFromRecord(matchRecord, seeds);
-      if (existingSeed && !matchSeeds.has(matchRecord.matchId)) matchSeeds.set(matchRecord.matchId, existingSeed);
+      if (existingSeed) addMatchSeed(matchSeeds, matchRecord.matchId, existingSeed.item, existingSeed.domain, { existing: true });
     }
     normalizeTrainingIncludedRecords(state);
     const existingByFingerprint = new Map(state.matchRecords.map((record) => [record.fingerprint || matchFingerprint(record), record]));
@@ -653,10 +687,17 @@ export async function onRequestPost({ request, env }) {
     let created = 0;
     let updated = 0;
     let refreshedExisting = 0;
+    let detailFailures = 0;
+    const detailFailureSamples = [];
 
     for (const [matchId, seed] of matchSeeds.entries()) {
-      const detail = await fetch5eJson(`/v0/mars/api/csgo/data/player_match_info/${encodeURIComponent(matchId)}/${encodeURIComponent(seed.domain)}`).catch(() => null);
-      if (!detail) continue;
+      const { detail, domain, errors } = await fetchMatchDetailWithFallback(matchId, seed.domains || [seed.domain]);
+      if (!detail) {
+        detailFailures += 1;
+        if (detailFailureSamples.length < 8) detailFailureSamples.push({ matchId, errors });
+        continue;
+      }
+      seed.domain = domain || seed.domain;
       const next = buildMatchRecord(state, seed.item, detail, indexes);
       const existing = existingByMatchId.get(next.matchId) || existingByFingerprint.get(next.fingerprint);
       if (existing) {
@@ -683,6 +724,9 @@ export async function onRequestPost({ request, env }) {
       seedMembers: seeds.length,
       scannedPages: pages,
       scannedMatches: matchSeeds.size,
+      listFailures: listFailures.length,
+      detailFailures,
+      detailFailureSamples,
       refreshedExisting,
       created,
       updated,

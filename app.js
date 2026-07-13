@@ -2489,12 +2489,15 @@ async function syncAllMatches() {
   try {
     const body = await api("/api/sync-matches", {
       method: "POST",
-      body: JSON.stringify({ pages: 3 }),
+      body: JSON.stringify({ pages: 5 }),
     });
     data = normalizeData(body.state);
     syncStatus = "";
     stopBusyTask(false);
-    alert(`对局同步完成：种子成员 ${body.seedMembers} 人，扫描 ${body.scannedPages || 1} 页/${body.scannedMatches} 场，新增 ${body.created} 场，更新 ${body.updated} 场，回源修复历史 ${body.refreshedExisting || 0} 场。`);
+    const failureText = body.listFailures || body.detailFailures
+      ? `，列表失败 ${body.listFailures || 0} 项，详情失败 ${body.detailFailures || 0} 场`
+      : "";
+    alert(`对局同步完成：种子成员 ${body.seedMembers} 人，扫描 ${body.scannedPages || 1} 页/${body.scannedMatches} 场，新增 ${body.created} 场，更新 ${body.updated} 场，回源修复历史 ${body.refreshedExisting || 0} 场${failureText}。`);
   } catch (error) {
     syncStatus = error.message;
     stopBusyTask(false);
