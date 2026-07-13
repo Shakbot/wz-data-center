@@ -489,18 +489,52 @@ function avatarMarkup(user, sizeClass = "") {
   return `<div class="avatar ${sizeClass}">${image}</div>`;
 }
 
-function parse5eProfile(value) {
+function isLikely5eDomain(value) {
+  return /^[a-z0-9][a-z0-9_-]{2,}$/i.test(String(value || "").trim());
+}
+
+function parse5eProfile(...values) {
+  const candidates = values.flat().map((value) => String(value || "").trim()).filter(Boolean);
+  let fallback = { domain: "", uuid: "", label: "" };
+  for (const raw of candidates) {
+    const parsed = parse5eProfileValue(raw);
+    fallback = {
+      domain: fallback.domain || parsed.domain,
+      uuid: fallback.uuid || parsed.uuid,
+      label: fallback.label || parsed.label,
+    };
+    if (parsed.domain) return parsed;
+  }
+  return fallback;
+}
+
+function parse5eProfileValue(value) {
   const raw = String(value || "").trim();
   if (!raw) return { domain: "", uuid: "", label: "" };
+  const domainMatch = raw.match(/[?&#]domain=([^&#]+)/i);
+  const uuidMatch = raw.match(/[?&#]uuid=([^&#]+)/i);
+  if (domainMatch) {
+    return {
+      domain: decodeURIComponent(domainMatch[1]).trim(),
+      uuid: uuidMatch ? decodeURIComponent(uuidMatch[1]).trim() : "",
+      label: raw,
+    };
+  }
   try {
     const url = new URL(raw);
+    const hashParams = new URLSearchParams(String(url.hash || "").replace(/^#\??/, ""));
+    const pathDomain = url.pathname
+      .split("/")
+      .map((part) => decodeURIComponent(part).trim())
+      .reverse()
+      .find((part) => isLikely5eDomain(part) && !["app", "fwap", "profile", "player", "user", "csgo"].includes(part.toLowerCase()));
     return {
-      domain: url.searchParams.get("domain") || "",
-      uuid: url.searchParams.get("uuid") || "",
+      domain: url.searchParams.get("domain") || hashParams.get("domain") || pathDomain || "",
+      uuid: url.searchParams.get("uuid") || hashParams.get("uuid") || "",
       label: raw,
     };
   } catch {
-    return { domain: raw, uuid: "", label: raw };
+    return { domain: isLikely5eDomain(raw) ? raw : "", uuid: "", label: raw };
   }
 }
 
@@ -2404,7 +2438,7 @@ async function handleFiveELink(form) {
     .filter(Boolean);
   const profile = parse5eProfile(raw);
   member.fiveEProfileUrl = raw;
-  member.fiveEDomain = profile.domain || raw;
+  member.fiveEDomain = raw ? (profile.domain || member.fiveEDomain || "") : "";
   member.fiveEAliases = aliases;
   if (profile.uuid) member.fiveEUuid = profile.uuid;
   await saveData();
@@ -2455,12 +2489,12 @@ async function syncAllMatches() {
   try {
     const body = await api("/api/sync-matches", {
       method: "POST",
-      body: JSON.stringify({ page: 1 }),
+      body: JSON.stringify({ pages: 3 }),
     });
     data = normalizeData(body.state);
     syncStatus = "";
     stopBusyTask(false);
-    alert(`对局同步完成：种子成员 ${body.seedMembers} 人，扫描 ${body.scannedMatches} 场，新增 ${body.created} 场，更新 ${body.updated} 场，回源修复历史 ${body.refreshedExisting || 0} 场。`);
+    alert(`对局同步完成：种子成员 ${body.seedMembers} 人，扫描 ${body.scannedPages || 1} 页/${body.scannedMatches} 场，新增 ${body.created} 场，更新 ${body.updated} 场，回源修复历史 ${body.refreshedExisting || 0} 场。`);
   } catch (error) {
     syncStatus = error.message;
     stopBusyTask(false);

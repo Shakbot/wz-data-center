@@ -2,18 +2,53 @@ import { ensureSchema, isAdmin, json, readState, userFromRequest, writeState } f
 
 const FIVE_E_BASE = "https://ya-api-app.5eplay.com";
 
-function parse5eProfile(value) {
+function isLikely5eDomain(value) {
+  return /^[a-z0-9][a-z0-9_-]{2,}$/i.test(String(value || "").trim());
+}
+
+function parse5eProfile(...values) {
+  const candidates = values.flat().map((value) => String(value || "").trim()).filter(Boolean);
+  let fallback = { domain: "", uuid: "", profileUrl: "" };
+  for (const raw of candidates) {
+    const parsed = parse5eProfileValue(raw);
+    fallback = {
+      domain: fallback.domain || parsed.domain,
+      uuid: fallback.uuid || parsed.uuid,
+      profileUrl: fallback.profileUrl || parsed.profileUrl,
+    };
+    if (parsed.domain) return parsed;
+  }
+  return fallback;
+}
+
+function parse5eProfileValue(value) {
   const raw = String(value || "").trim();
   if (!raw) return { domain: "", uuid: "", profileUrl: "" };
+  const domainMatch = raw.match(/[?&#]domain=([^&#]+)/i);
+  const uuidMatch = raw.match(/[?&#]uuid=([^&#]+)/i);
+  if (domainMatch) {
+    return {
+      domain: decodeURIComponent(domainMatch[1]).trim(),
+      uuid: uuidMatch ? decodeURIComponent(uuidMatch[1]).trim() : "",
+      profileUrl: raw,
+    };
+  }
   try {
     const url = new URL(raw);
+    const hashParams = new URLSearchParams(String(url.hash || "").replace(/^#\??/, ""));
+    const uuid = url.searchParams.get("uuid") || hashParams.get("uuid") || "";
+    const pathDomain = url.pathname
+      .split("/")
+      .map((part) => decodeURIComponent(part).trim())
+      .reverse()
+      .find((part) => isLikely5eDomain(part) && !["app", "fwap", "profile", "player", "user", "csgo"].includes(part.toLowerCase()));
     return {
-      domain: url.searchParams.get("domain") || "",
-      uuid: url.searchParams.get("uuid") || "",
+      domain: url.searchParams.get("domain") || hashParams.get("domain") || pathDomain || "",
+      uuid,
       profileUrl: raw,
     };
   } catch {
-    return { domain: raw, uuid: "", profileUrl: "" };
+    return { domain: isLikely5eDomain(raw) ? raw : "", uuid: "", profileUrl: "" };
   }
 }
 
@@ -189,7 +224,7 @@ export async function onRequestPost({ request, env }) {
     const member = state.users.find((user) => user.identityCode === identityCode);
     if (!member) return json({ error: "找不到要同步的成员。" }, 404);
 
-    const profile = parse5eProfile(body.profileUrl || body.domain || member.fiveEProfileUrl || member.fiveEDomain);
+    const profile = parse5eProfile(body.profileUrl, body.domain, member.fiveEProfileUrl, member.fiveEDomain);
     const domain = profile.domain;
     if (!domain) return json({ error: "请先在资料里填写 5E 个人主页链接。" }, 400);
 

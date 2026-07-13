@@ -2,18 +2,53 @@ import { ensureSchema, isAdmin, json, readState, userFromRequest, writeState } f
 
 const FIVE_E_BASE = "https://ya-api-app.5eplay.com";
 
-function parse5eProfile(value) {
+function isLikely5eDomain(value) {
+  return /^[a-z0-9][a-z0-9_-]{2,}$/i.test(String(value || "").trim());
+}
+
+function parse5eProfile(...values) {
+  const candidates = values.flat().map((value) => String(value || "").trim()).filter(Boolean);
+  let fallback = { domain: "", uuid: "", profileUrl: "" };
+  for (const raw of candidates) {
+    const parsed = parse5eProfileValue(raw);
+    fallback = {
+      domain: fallback.domain || parsed.domain,
+      uuid: fallback.uuid || parsed.uuid,
+      profileUrl: fallback.profileUrl || parsed.profileUrl,
+    };
+    if (parsed.domain) return parsed;
+  }
+  return fallback;
+}
+
+function parse5eProfileValue(value) {
   const raw = String(value || "").trim();
   if (!raw) return { domain: "", uuid: "", profileUrl: "" };
+  const domainMatch = raw.match(/[?&#]domain=([^&#]+)/i);
+  const uuidMatch = raw.match(/[?&#]uuid=([^&#]+)/i);
+  if (domainMatch) {
+    return {
+      domain: decodeURIComponent(domainMatch[1]).trim(),
+      uuid: uuidMatch ? decodeURIComponent(uuidMatch[1]).trim() : "",
+      profileUrl: raw,
+    };
+  }
   try {
     const url = new URL(raw);
+    const hashParams = new URLSearchParams(String(url.hash || "").replace(/^#\??/, ""));
+    const uuid = url.searchParams.get("uuid") || hashParams.get("uuid") || "";
+    const pathDomain = url.pathname
+      .split("/")
+      .map((part) => decodeURIComponent(part).trim())
+      .reverse()
+      .find((part) => isLikely5eDomain(part) && !["app", "fwap", "profile", "player", "user", "csgo"].includes(part.toLowerCase()));
     return {
-      domain: url.searchParams.get("domain") || "",
-      uuid: url.searchParams.get("uuid") || "",
+      domain: url.searchParams.get("domain") || hashParams.get("domain") || pathDomain || "",
+      uuid,
       profileUrl: raw,
     };
   } catch {
-    return { domain: raw, uuid: "", profileUrl: "" };
+    return { domain: isLikely5eDomain(raw) ? raw : "", uuid: "", profileUrl: "" };
   }
 }
 
@@ -175,7 +210,7 @@ function buildMemberIndexes(users) {
     }
   };
   for (const user of users) {
-    const profile = parse5eProfile(user.fiveEProfileUrl || user.fiveEDomain);
+    const profile = parse5eProfile(user.fiveEProfileUrl, user.fiveEDomain);
     if (profile.domain) byDomain.set(profile.domain, user);
     if (profile.uuid) byUuid.set(profile.uuid, user);
     if (user.fiveEUuid) byUuid.set(String(user.fiveEUuid), user);
@@ -581,19 +616,21 @@ export async function onRequestPost({ request, env }) {
     if (!isAdmin(actor)) return json({ error: "只有管理员可以一键同步全员对局。" }, 403);
 
     const body = await request.json().catch(() => ({}));
-    const page = Math.max(1, Math.min(3, Number(body.page || 1)));
+    const pages = Math.max(1, Math.min(3, Number(body.pages || body.page || 3)));
     normalizeUserAliases(state);
     const seeds = state.users
-      .map((user) => ({ user, profile: parse5eProfile(user.fiveEProfileUrl || user.fiveEDomain) }))
+      .map((user) => ({ user, profile: parse5eProfile(user.fiveEProfileUrl, user.fiveEDomain) }))
       .filter((item) => item.profile.domain);
     if (!seeds.length) return json({ error: "还没有成员绑定 5E 个人主页链接。" }, 400);
 
     const matchSeeds = new Map();
     for (const seed of seeds) {
-      const listData = await fetch5eJson(`/v0/mars/api/csgo/match_data/match_list?domain=${encodeURIComponent(seed.profile.domain)}&match_type=&time=&date_time=0&map_name=&page=${page}`);
-      for (const item of (listData.match_list || []).slice(0, 20)) {
-        if (!item.match_id || matchSeeds.has(item.match_id)) continue;
-        matchSeeds.set(item.match_id, { item, domain: seed.profile.domain });
+      for (let page = 1; page <= pages; page += 1) {
+        const listData = await fetch5eJson(`/v0/mars/api/csgo/match_data/match_list?domain=${encodeURIComponent(seed.profile.domain)}&match_type=&time=&date_time=0&map_name=&page=${page}`);
+        for (const item of (listData.match_list || []).slice(0, 20)) {
+          if (!item.match_id || matchSeeds.has(item.match_id)) continue;
+          matchSeeds.set(item.match_id, { item, domain: seed.profile.domain });
+        }
       }
       seed.user.fiveEDomain = seed.profile.domain;
       if (seed.profile.uuid) seed.user.fiveEUuid = seed.profile.uuid;
@@ -644,6 +681,7 @@ export async function onRequestPost({ request, env }) {
     return json({
       ok: true,
       seedMembers: seeds.length,
+      scannedPages: pages,
       scannedMatches: matchSeeds.size,
       refreshedExisting,
       created,
