@@ -497,6 +497,10 @@ function isBlockedPathDomain(value) {
   return /^(app|fwap|profile|player|user|csgo|share_loding_type\d*|share_loading_type\d*|data|match_data)$/i.test(String(value || "").trim());
 }
 
+function isUsable5eDomain(value) {
+  return isLikely5eDomain(value) && !isBlockedPathDomain(value);
+}
+
 function parse5eProfile(...values) {
   const candidates = values.flat().map((value) => String(value || "").trim()).filter(Boolean);
   let fallback = { domain: "", uuid: "", label: "" };
@@ -533,7 +537,7 @@ function parse5eProfileValue(value) {
       .split("/")
       .map((part) => decodeURIComponent(part).trim())
       .reverse()
-      .find((part) => isLikely5eDomain(part) && !isBlockedPathDomain(part));
+      .find(isUsable5eDomain);
     return {
       domain: explicitDomain || pathDomain || "",
       uuid: url.searchParams.get("uuid") || hashParams.get("uuid") || "",
@@ -541,7 +545,7 @@ function parse5eProfileValue(value) {
       explicitDomain: Boolean(explicitDomain),
     };
   } catch {
-    return { domain: isLikely5eDomain(raw) ? raw : "", uuid: "", label: raw, explicitDomain: isLikely5eDomain(raw) };
+    return { domain: isUsable5eDomain(raw) ? raw : "", uuid: "", label: raw, explicitDomain: isUsable5eDomain(raw) };
   }
 }
 

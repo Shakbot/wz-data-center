@@ -10,6 +10,10 @@ function isBlockedPathDomain(value) {
   return /^(app|fwap|profile|player|user|csgo|share_loding_type\d*|share_loading_type\d*|data|match_data)$/i.test(String(value || "").trim());
 }
 
+function isUsable5eDomain(value) {
+  return isLikely5eDomain(value) && !isBlockedPathDomain(value);
+}
+
 function parse5eProfile(...values) {
   const candidates = values.flat().map((value) => String(value || "").trim()).filter(Boolean);
   let fallback = { domain: "", uuid: "", profileUrl: "" };
@@ -47,7 +51,7 @@ function parse5eProfileValue(value) {
       .split("/")
       .map((part) => decodeURIComponent(part).trim())
       .reverse()
-      .find((part) => isLikely5eDomain(part) && !isBlockedPathDomain(part));
+      .find(isUsable5eDomain);
     return {
       domain: explicitDomain || pathDomain || "",
       uuid,
@@ -55,7 +59,7 @@ function parse5eProfileValue(value) {
       explicitDomain: Boolean(explicitDomain),
     };
   } catch {
-    return { domain: isLikely5eDomain(raw) ? raw : "", uuid: "", profileUrl: "", explicitDomain: isLikely5eDomain(raw) };
+    return { domain: isUsable5eDomain(raw) ? raw : "", uuid: "", profileUrl: "", explicitDomain: isUsable5eDomain(raw) };
   }
 }
 
@@ -139,6 +143,16 @@ function normalizeUserAliases(state) {
     const aliases = new Set(user.fiveEAliases);
     for (const alias of defaults[user.identityCode] || []) aliases.add(alias);
     user.fiveEAliases = [...aliases];
+  }
+}
+
+function normalizeFiveEProfiles(state) {
+  for (const user of state.users || []) {
+    const rawDomain = String(user.fiveEDomain || "").trim();
+    if (rawDomain && !parse5eProfile(rawDomain).domain) user.fiveEDomain = "";
+    const profile = parse5eProfile(user.fiveEProfileUrl, user.fiveEDomain);
+    if (profile.domain) user.fiveEDomain = profile.domain;
+    if (profile.uuid && !user.fiveEUuid) user.fiveEUuid = profile.uuid;
   }
 }
 
@@ -685,6 +699,7 @@ export async function onRequestPost({ request, env }) {
     const body = await request.json().catch(() => ({}));
     const pages = Math.max(1, Math.min(5, Number(body.pages || body.page || 5)));
     normalizeUserAliases(state);
+    normalizeFiveEProfiles(state);
     const seeds = state.users
       .map((user) => ({ user, profile: parse5eProfile(user.fiveEProfileUrl, user.fiveEDomain) }))
       .filter((item) => item.profile.domain);
