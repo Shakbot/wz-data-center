@@ -6,17 +6,21 @@ function isLikely5eDomain(value) {
   return /^[a-z0-9][a-z0-9_-]{2,}$/i.test(String(value || "").trim());
 }
 
+function isBlockedPathDomain(value) {
+  return /^(app|fwap|profile|player|user|csgo|share_loding_type\d*|share_loading_type\d*|data|match_data)$/i.test(String(value || "").trim());
+}
+
 function parse5eProfile(...values) {
   const candidates = values.flat().map((value) => String(value || "").trim()).filter(Boolean);
   let fallback = { domain: "", uuid: "", profileUrl: "" };
   for (const raw of candidates) {
     const parsed = parse5eProfileValue(raw);
+    if (parsed.explicitDomain) return { domain: parsed.domain, uuid: parsed.uuid, profileUrl: parsed.profileUrl };
     fallback = {
       domain: fallback.domain || parsed.domain,
       uuid: fallback.uuid || parsed.uuid,
       profileUrl: fallback.profileUrl || parsed.profileUrl,
     };
-    if (parsed.domain) return parsed;
   }
   return fallback;
 }
@@ -31,24 +35,27 @@ function parse5eProfileValue(value) {
       domain: decodeURIComponent(domainMatch[1]).trim(),
       uuid: uuidMatch ? decodeURIComponent(uuidMatch[1]).trim() : "",
       profileUrl: raw,
+      explicitDomain: true,
     };
   }
   try {
     const url = new URL(raw);
     const hashParams = new URLSearchParams(String(url.hash || "").replace(/^#\??/, ""));
     const uuid = url.searchParams.get("uuid") || hashParams.get("uuid") || "";
+    const explicitDomain = url.searchParams.get("domain") || hashParams.get("domain") || "";
     const pathDomain = url.pathname
       .split("/")
       .map((part) => decodeURIComponent(part).trim())
       .reverse()
-      .find((part) => isLikely5eDomain(part) && !["app", "fwap", "profile", "player", "user", "csgo"].includes(part.toLowerCase()));
+      .find((part) => isLikely5eDomain(part) && !isBlockedPathDomain(part));
     return {
-      domain: url.searchParams.get("domain") || hashParams.get("domain") || pathDomain || "",
+      domain: explicitDomain || pathDomain || "",
       uuid,
       profileUrl: raw,
+      explicitDomain: Boolean(explicitDomain),
     };
   } catch {
-    return { domain: isLikely5eDomain(raw) ? raw : "", uuid: "", profileUrl: "" };
+    return { domain: isLikely5eDomain(raw) ? raw : "", uuid: "", profileUrl: "", explicitDomain: isLikely5eDomain(raw) };
   }
 }
 
@@ -411,10 +418,40 @@ function buildMatchRecord(state, listItem, detail, indexes) {
   return record;
 }
 
+function buildPendingMatchRecord(state, listItem, domains = []) {
+  const date = dateFromUnix(listItem.end_time || listItem.start_time);
+  const season = findSeasonForDate(state, date);
+  const record = {
+    matchId: listItem.match_id,
+    date,
+    endTime: String(listItem.end_time || ""),
+    startTime: String(listItem.start_time || ""),
+    map: String(listItem.map || ""),
+    mapName: String(listItem.map_name || listItem.map_desc || ""),
+    matchName: String(listItem.match_name || ""),
+    matchType: String(listItem.match_type || ""),
+    scoreA: firstNumber(listItem, ["group2_all_score", "group2_score", "team2_score", "score2", "b_score"]),
+    scoreB: firstNumber(listItem, ["group1_all_score", "group1_score", "team1_score", "score1", "a_score"]),
+    seasonId: season ? season.id : "",
+    recognizedMemberCodes: [],
+    isTrainingCandidate: false,
+    isTrainingConfirmed: false,
+    players: [],
+    playerViews: { full: [] },
+    pendingDetail: true,
+    detailDomains: [...new Set(domains.filter(Boolean))],
+    syncedAt: new Date().toISOString(),
+  };
+  record.fingerprint = matchFingerprint(record);
+  record.id = `match-${record.fingerprint}`;
+  return record;
+}
+
 function matchSeedFromRecord(matchRecord, seeds) {
   const memberSeed = seeds.find((seed) => (matchRecord.recognizedMemberCodes || []).includes(seed.user.identityCode));
   const playerDomain = (matchRecord.players || []).find((player) => player.domain)?.domain || "";
-  const domain = memberSeed?.profile?.domain || playerDomain || seeds[0]?.profile?.domain || "";
+  const storedDomain = (matchRecord.detailDomains || []).find(Boolean) || "";
+  const domain = memberSeed?.profile?.domain || playerDomain || storedDomain || seeds[0]?.profile?.domain || "";
   if (!matchRecord.matchId || !domain) return null;
   return {
     domain,
@@ -429,7 +466,7 @@ function matchSeedFromRecord(matchRecord, seeds) {
       match_type: matchRecord.matchType || "",
     },
     existing: true,
-    domains: [domain],
+    domains: [domain, ...(matchRecord.detailDomains || [])],
   };
 }
 
@@ -688,6 +725,7 @@ export async function onRequestPost({ request, env }) {
     let updated = 0;
     let refreshedExisting = 0;
     let detailFailures = 0;
+    let pendingCreated = 0;
     const detailFailureSamples = [];
 
     for (const [matchId, seed] of matchSeeds.entries()) {
@@ -695,6 +733,18 @@ export async function onRequestPost({ request, env }) {
       if (!detail) {
         detailFailures += 1;
         if (detailFailureSamples.length < 8) detailFailureSamples.push({ matchId, errors });
+        const current = existingByMatchId.get(matchId);
+        if (!current) {
+          const pending = buildPendingMatchRecord(state, seed.item, seed.domains || [seed.domain]);
+          state.matchRecords.push(pending);
+          existingByFingerprint.set(pending.fingerprint, pending);
+          existingByMatchId.set(pending.matchId, pending);
+          pendingCreated += 1;
+        } else {
+          current.pendingDetail = true;
+          current.detailDomains = [...new Set([...(current.detailDomains || []), ...(seed.domains || [seed.domain])].filter(Boolean))];
+          current.syncedAt = new Date().toISOString();
+        }
         continue;
       }
       seed.domain = domain || seed.domain;
@@ -702,6 +752,7 @@ export async function onRequestPost({ request, env }) {
       const existing = existingByMatchId.get(next.matchId) || existingByFingerprint.get(next.fingerprint);
       if (existing) {
         Object.assign(existing, next, { isTrainingConfirmed: existing.isTrainingConfirmed || false });
+        delete existing.pendingDetail;
         existingByFingerprint.set(existing.fingerprint, existing);
         existingByMatchId.set(existing.matchId, existing);
         updated += 1;
@@ -727,6 +778,7 @@ export async function onRequestPost({ request, env }) {
       listFailures: listFailures.length,
       detailFailures,
       detailFailureSamples,
+      pendingCreated,
       refreshedExisting,
       created,
       updated,

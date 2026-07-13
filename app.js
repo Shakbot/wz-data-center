@@ -493,17 +493,21 @@ function isLikely5eDomain(value) {
   return /^[a-z0-9][a-z0-9_-]{2,}$/i.test(String(value || "").trim());
 }
 
+function isBlockedPathDomain(value) {
+  return /^(app|fwap|profile|player|user|csgo|share_loding_type\d*|share_loading_type\d*|data|match_data)$/i.test(String(value || "").trim());
+}
+
 function parse5eProfile(...values) {
   const candidates = values.flat().map((value) => String(value || "").trim()).filter(Boolean);
   let fallback = { domain: "", uuid: "", label: "" };
   for (const raw of candidates) {
     const parsed = parse5eProfileValue(raw);
+    if (parsed.explicitDomain) return { domain: parsed.domain, uuid: parsed.uuid, label: parsed.label };
     fallback = {
       domain: fallback.domain || parsed.domain,
       uuid: fallback.uuid || parsed.uuid,
       label: fallback.label || parsed.label,
     };
-    if (parsed.domain) return parsed;
   }
   return fallback;
 }
@@ -518,23 +522,26 @@ function parse5eProfileValue(value) {
       domain: decodeURIComponent(domainMatch[1]).trim(),
       uuid: uuidMatch ? decodeURIComponent(uuidMatch[1]).trim() : "",
       label: raw,
+      explicitDomain: true,
     };
   }
   try {
     const url = new URL(raw);
     const hashParams = new URLSearchParams(String(url.hash || "").replace(/^#\??/, ""));
+    const explicitDomain = url.searchParams.get("domain") || hashParams.get("domain") || "";
     const pathDomain = url.pathname
       .split("/")
       .map((part) => decodeURIComponent(part).trim())
       .reverse()
-      .find((part) => isLikely5eDomain(part) && !["app", "fwap", "profile", "player", "user", "csgo"].includes(part.toLowerCase()));
+      .find((part) => isLikely5eDomain(part) && !isBlockedPathDomain(part));
     return {
-      domain: url.searchParams.get("domain") || hashParams.get("domain") || pathDomain || "",
+      domain: explicitDomain || pathDomain || "",
       uuid: url.searchParams.get("uuid") || hashParams.get("uuid") || "",
       label: raw,
+      explicitDomain: Boolean(explicitDomain),
     };
   } catch {
-    return { domain: isLikely5eDomain(raw) ? raw : "", uuid: "", label: raw };
+    return { domain: isLikely5eDomain(raw) ? raw : "", uuid: "", label: raw, explicitDomain: isLikely5eDomain(raw) };
   }
 }
 
@@ -2494,8 +2501,8 @@ async function syncAllMatches() {
     data = normalizeData(body.state);
     syncStatus = "";
     stopBusyTask(false);
-    const failureText = body.listFailures || body.detailFailures
-      ? `，列表失败 ${body.listFailures || 0} 项，详情失败 ${body.detailFailures || 0} 场`
+    const failureText = body.listFailures || body.detailFailures || body.pendingCreated
+      ? `，列表失败 ${body.listFailures || 0} 项，详情失败 ${body.detailFailures || 0} 场，待补全 ${body.pendingCreated || 0} 场`
       : "";
     alert(`对局同步完成：种子成员 ${body.seedMembers} 人，扫描 ${body.scannedPages || 1} 页/${body.scannedMatches} 场，新增 ${body.created} 场，更新 ${body.updated} 场，回源修复历史 ${body.refreshedExisting || 0} 场${failureText}。`);
   } catch (error) {

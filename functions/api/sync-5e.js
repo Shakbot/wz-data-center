@@ -6,17 +6,21 @@ function isLikely5eDomain(value) {
   return /^[a-z0-9][a-z0-9_-]{2,}$/i.test(String(value || "").trim());
 }
 
+function isBlockedPathDomain(value) {
+  return /^(app|fwap|profile|player|user|csgo|share_loding_type\d*|share_loading_type\d*|data|match_data)$/i.test(String(value || "").trim());
+}
+
 function parse5eProfile(...values) {
   const candidates = values.flat().map((value) => String(value || "").trim()).filter(Boolean);
   let fallback = { domain: "", uuid: "", profileUrl: "" };
   for (const raw of candidates) {
     const parsed = parse5eProfileValue(raw);
+    if (parsed.explicitDomain) return { domain: parsed.domain, uuid: parsed.uuid, profileUrl: parsed.profileUrl };
     fallback = {
       domain: fallback.domain || parsed.domain,
       uuid: fallback.uuid || parsed.uuid,
       profileUrl: fallback.profileUrl || parsed.profileUrl,
     };
-    if (parsed.domain) return parsed;
   }
   return fallback;
 }
@@ -31,24 +35,27 @@ function parse5eProfileValue(value) {
       domain: decodeURIComponent(domainMatch[1]).trim(),
       uuid: uuidMatch ? decodeURIComponent(uuidMatch[1]).trim() : "",
       profileUrl: raw,
+      explicitDomain: true,
     };
   }
   try {
     const url = new URL(raw);
     const hashParams = new URLSearchParams(String(url.hash || "").replace(/^#\??/, ""));
     const uuid = url.searchParams.get("uuid") || hashParams.get("uuid") || "";
+    const explicitDomain = url.searchParams.get("domain") || hashParams.get("domain") || "";
     const pathDomain = url.pathname
       .split("/")
       .map((part) => decodeURIComponent(part).trim())
       .reverse()
-      .find((part) => isLikely5eDomain(part) && !["app", "fwap", "profile", "player", "user", "csgo"].includes(part.toLowerCase()));
+      .find((part) => isLikely5eDomain(part) && !isBlockedPathDomain(part));
     return {
-      domain: url.searchParams.get("domain") || hashParams.get("domain") || pathDomain || "",
+      domain: explicitDomain || pathDomain || "",
       uuid,
       profileUrl: raw,
+      explicitDomain: Boolean(explicitDomain),
     };
   } catch {
-    return { domain: isLikely5eDomain(raw) ? raw : "", uuid: "", profileUrl: "" };
+    return { domain: isLikely5eDomain(raw) ? raw : "", uuid: "", profileUrl: "", explicitDomain: isLikely5eDomain(raw) };
   }
 }
 
