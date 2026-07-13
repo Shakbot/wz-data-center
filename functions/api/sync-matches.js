@@ -1,6 +1,8 @@
 import { ensureSchema, isAdmin, json, readState, userFromRequest, writeState } from "./_utils.js";
 
 const FIVE_E_BASE = "https://ya-api-app.5eplay.com";
+const FIVE_E_GATE_BASE = "https://gate.5eplay.com";
+const FIVE_E_GATE_REFERER = "https://view-arena.5eplay.com/";
 
 function isLikely5eDomain(value) {
   return /^[a-z0-9][a-z0-9_-]{2,}$/i.test(String(value || "").trim());
@@ -167,6 +169,142 @@ async function fetch5eJson(path) {
   const body = await response.json().catch(() => null);
   if (!response.ok || !body?.success) throw new Error(body?.message || `5E 接口请求失败：${response.status}`);
   return body.data;
+}
+
+function base64FromArrayBuffer(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  for (let index = 0; index < bytes.length; index += 1) binary += String.fromCharCode(bytes[index]);
+  return btoa(binary);
+}
+
+async function hmacSha256Base64(secret, text) {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(text));
+  return base64FromArrayBuffer(signature);
+}
+
+function gateSignText({ method, accept, contentMd5, contentType, signedHeaders, pathAndParameters }) {
+  const fields = {
+    HTTPMethod: method,
+    Accept: accept,
+    "Content-MD5": contentMd5,
+    "Content-Type": contentType,
+    Date: "",
+  };
+  if (signedHeaders) fields.Headers = signedHeaders;
+  fields.PathAndParameters = pathAndParameters;
+  return Object.values(fields).join("\n");
+}
+
+async function fetch5eGateJson(env, path) {
+  const secret = env?.FIVE_E_GATE_HMAC_KEY || env?.FIVE_E_GATE_SECRET || env?.FIVE_E_GATE_SIGN_KEY;
+  if (!secret) {
+    throw new Error("5E gate 详情接口需要配置 FIVE_E_GATE_HMAC_KEY 后才能回源。");
+  }
+  const method = "GET";
+  const accept = "*/*";
+  const contentMd5 = "";
+  const contentType = "";
+  const signedHeaderNames = ["Accept-Language", "Authorization"];
+  const signedHeaders = "accept-language:zh-cn\nauthorization:";
+  const signature = await hmacSha256Base64(secret, gateSignText({
+    method,
+    accept,
+    contentMd5,
+    contentType,
+    signedHeaders,
+    pathAndParameters: path,
+  }));
+  const response = await fetch(`${FIVE_E_GATE_BASE}${path}`, {
+    headers: {
+      "Accept": accept,
+      "Accept-Language": "zh-cn",
+      "Authorization": "",
+      "Content-MD5": contentMd5,
+      "Referer": FIVE_E_GATE_REFERER,
+      "User-Agent": "Mozilla/5.0",
+      "x-ca-key": "5eplay",
+      "x-ca-signature": signature,
+      "x-ca-signature-headers": signedHeaderNames.join(","),
+      "x-ca-signature-method": "HmacSHA256",
+    },
+  });
+  const body = await response.json().catch(() => null);
+  if (!response.ok || !(body?.success || body?.status || body?.code === 0)) {
+    throw new Error(body?.message || `5E gate 详情接口请求失败：${response.status}`);
+  }
+  return body.data;
+}
+
+function avatarUrl(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  if (/^https?:\/\//i.test(text)) return text;
+  return `https://oss-arena.5eplay.com/${text.replace(/^\/+/, "")}`;
+}
+
+function chooseArenaRating(fight = {}) {
+  const rating = Number(fight.rating);
+  if (Number.isFinite(rating) && rating > 0) return fight.rating;
+  const rating2 = Number(fight.rating2);
+  if (Number.isFinite(rating2) && rating2 > 0) return fight.rating2;
+  return fight.rating || fight.rating2 || fight.rating3 || 0;
+}
+
+function normalizeArenaFightRow(row, fightKey, fallbackTeam) {
+  const fight = row?.[fightKey] || {};
+  const userData = row?.user_info?.user_data || {};
+  const profile = userData.profile || {};
+  const steam = userData.steam || {};
+  const level = row?.level_info || {};
+  return {
+    ...fight,
+    group_id: fight.group_id || fallbackTeam,
+    team: fight.group_id || fallbackTeam,
+    uid: fight.uid || userData.uid || profile.uid || "",
+    uuid: userData.uuid || "",
+    domain: profile.domain || "",
+    username: profile.nickname || userData.username || profile.domain || "",
+    nickname: profile.nickname || userData.username || profile.domain || "",
+    player_name: profile.nickname || userData.username || profile.domain || "",
+    avatar_url: avatarUrl(profile.avatarUrl),
+    steam_id: steam.steamId || "",
+    level_name: level.level_name || level.rank || "",
+    rating: chooseArenaRating(fight),
+  };
+}
+
+function normalizeArenaMatchDetail(data) {
+  const group1 = Array.isArray(data?.group_1) ? data.group_1 : [];
+  const group2 = Array.isArray(data?.group_2) ? data.group_2 : [];
+  const group1Full = group1.map((row) => normalizeArenaFightRow(row, "fight", "1"));
+  const group2Full = group2.map((row) => normalizeArenaFightRow(row, "fight", "2"));
+  return {
+    ...data,
+    main: data?.main || {},
+    user_match_data: [...group1Full, ...group2Full],
+    group1_user_match_data: group1Full,
+    group2_user_match_data: group2Full,
+    ct_user_match_data: [
+      ...group1.map((row) => normalizeArenaFightRow(row, "fight_ct", "1")),
+      ...group2.map((row) => normalizeArenaFightRow(row, "fight_ct", "2")),
+    ],
+    t_user_match_data: [
+      ...group1.map((row) => normalizeArenaFightRow(row, "fight_t", "1")),
+      ...group2.map((row) => normalizeArenaFightRow(row, "fight_t", "2")),
+    ],
+  };
+}
+
+function detailHasPlayers(detail) {
+  return readScoreboardRows(detail || {}).length > 0;
 }
 
 function rowsWithTeam(rows, fallbackTeam = "") {
@@ -500,17 +638,26 @@ function addMatchSeed(matchSeeds, matchId, item, domain, extra = {}) {
   });
 }
 
-async function fetchMatchDetailWithFallback(matchId, domains) {
+async function fetchMatchDetailWithFallback(matchId, domains, env) {
   const errors = [];
   for (const domain of [...new Set(domains.filter(Boolean))]) {
     try {
       const detail = await fetch5eJson(`/v0/mars/api/csgo/data/player_match_info/${encodeURIComponent(matchId)}/${encodeURIComponent(domain)}`);
-      return { detail, domain, errors };
+      if (detailHasPlayers(detail)) return { detail, domain, errors, source: "player_match_info" };
+      errors.push(`${domain}: 旧详情接口返回空记分板`);
     } catch (error) {
       errors.push(`${domain}: ${error.message || String(error)}`);
     }
   }
-  return { detail: null, domain: "", errors };
+  try {
+    const arenaData = await fetch5eGateJson(env, `/cranenew/http/api/data/match/${encodeURIComponent(matchId)}`);
+    const detail = normalizeArenaMatchDetail(arenaData);
+    if (detailHasPlayers(detail)) return { detail, domain: "", errors, source: "gate_match" };
+    errors.push("gate_match: 详情接口返回空记分板");
+  } catch (error) {
+    errors.push(`gate_match: ${error.message || String(error)}`);
+  }
+  return { detail: null, domain: "", errors, source: "" };
 }
 
 function upsertPersonalRecords(state, matchRecord) {
@@ -741,10 +888,11 @@ export async function onRequestPost({ request, env }) {
     let refreshedExisting = 0;
     let detailFailures = 0;
     let pendingCreated = 0;
+    let gateFallbacks = 0;
     const detailFailureSamples = [];
 
     for (const [matchId, seed] of matchSeeds.entries()) {
-      const { detail, domain, errors } = await fetchMatchDetailWithFallback(matchId, seed.domains || [seed.domain]);
+      const { detail, domain, errors, source } = await fetchMatchDetailWithFallback(matchId, seed.domains || [seed.domain], env);
       if (!detail) {
         detailFailures += 1;
         if (detailFailureSamples.length < 8) detailFailureSamples.push({ matchId, errors });
@@ -762,6 +910,7 @@ export async function onRequestPost({ request, env }) {
         }
         continue;
       }
+      if (source === "gate_match") gateFallbacks += 1;
       seed.domain = domain || seed.domain;
       const next = buildMatchRecord(state, seed.item, detail, indexes);
       const existing = existingByMatchId.get(next.matchId) || existingByFingerprint.get(next.fingerprint);
@@ -794,6 +943,7 @@ export async function onRequestPost({ request, env }) {
       detailFailures,
       detailFailureSamples,
       pendingCreated,
+      gateFallbacks,
       refreshedExisting,
       created,
       updated,
