@@ -179,7 +179,6 @@ let sidebarOpen = false;
 let booting = true;
 let syncStatus = "";
 let selectedMatchId = "";
-let selectedMatchScope = "full";
 let selectedRecordIds = new Set();
 let savingData = false;
 let saveQueue = Promise.resolve();
@@ -489,63 +488,18 @@ function avatarMarkup(user, sizeClass = "") {
   return `<div class="avatar ${sizeClass}">${image}</div>`;
 }
 
-function isLikely5eDomain(value) {
-  return /^[a-z0-9][a-z0-9_-]{2,}$/i.test(String(value || "").trim());
-}
-
-function isBlockedPathDomain(value) {
-  return /^(app|fwap|profile|player|user|csgo|share_loding_type\d*|share_loading_type\d*|data|match_data)$/i.test(String(value || "").trim());
-}
-
-function isUsable5eDomain(value) {
-  return isLikely5eDomain(value) && !isBlockedPathDomain(value);
-}
-
-function parse5eProfile(...values) {
-  const candidates = values.flat().map((value) => String(value || "").trim()).filter(Boolean);
-  let fallback = { domain: "", uuid: "", label: "" };
-  for (const raw of candidates) {
-    const parsed = parse5eProfileValue(raw);
-    if (parsed.explicitDomain) return { domain: parsed.domain, uuid: parsed.uuid, label: parsed.label };
-    fallback = {
-      domain: fallback.domain || parsed.domain,
-      uuid: fallback.uuid || parsed.uuid,
-      label: fallback.label || parsed.label,
-    };
-  }
-  return fallback;
-}
-
-function parse5eProfileValue(value) {
+function parse5eProfile(value) {
   const raw = String(value || "").trim();
   if (!raw) return { domain: "", uuid: "", label: "" };
-  const domainMatch = raw.match(/[?&#]domain=([^&#]+)/i);
-  const uuidMatch = raw.match(/[?&#]uuid=([^&#]+)/i);
-  if (domainMatch) {
-    return {
-      domain: decodeURIComponent(domainMatch[1]).trim(),
-      uuid: uuidMatch ? decodeURIComponent(uuidMatch[1]).trim() : "",
-      label: raw,
-      explicitDomain: true,
-    };
-  }
   try {
     const url = new URL(raw);
-    const hashParams = new URLSearchParams(String(url.hash || "").replace(/^#\??/, ""));
-    const explicitDomain = url.searchParams.get("domain") || hashParams.get("domain") || "";
-    const pathDomain = url.pathname
-      .split("/")
-      .map((part) => decodeURIComponent(part).trim())
-      .reverse()
-      .find(isUsable5eDomain);
     return {
-      domain: explicitDomain || pathDomain || "",
-      uuid: url.searchParams.get("uuid") || hashParams.get("uuid") || "",
+      domain: url.searchParams.get("domain") || "",
+      uuid: url.searchParams.get("uuid") || "",
       label: raw,
-      explicitDomain: Boolean(explicitDomain),
     };
   } catch {
-    return { domain: isUsable5eDomain(raw) ? raw : "", uuid: "", label: raw, explicitDomain: isUsable5eDomain(raw) };
+    return { domain: raw, uuid: "", label: raw };
   }
 }
 
@@ -856,10 +810,8 @@ function matchOutcome(match) {
 function renderMatchDetail(matchId) {
   const match = (data.matchRecords || []).find((item) => item.id === matchId || item.matchId === matchId);
   if (!match) return "";
-  const scope = matchDetailScope(match);
-  const players = matchDetailPlayers(matchPlayersForScope(match, scope));
+  const players = matchDetailPlayers(match.players || []);
   const rwsRatings = matchRwsRatings(players);
-  const scopeTabs = renderMatchScopeTabs(match, scope);
   const rows = players.map((player) => {
     const member = player.memberCode ? userByCode(player.memberCode) : null;
     const rating = rwsRatings.get(player);
@@ -885,63 +837,18 @@ function renderMatchDetail(matchId) {
         <div class="panel-head">
           <div>
             <h3>${escapeHtml(match.mapName || match.map || "5E 对局")} · ${escapeHtml(match.scoreA ?? "-")} : ${escapeHtml(match.scoreB ?? "-")}</h3>
-            <div class="date-line">${escapeHtml(match.date || "")} · ${escapeHtml(match.matchName || "")} · Match ${escapeHtml(match.matchId)} · ${escapeHtml(matchScopeLabel(scope))}</div>
+            <div class="date-line">${escapeHtml(match.date || "")} · ${escapeHtml(match.matchName || "")} · Match ${escapeHtml(match.matchId)}</div>
           </div>
           <button class="icon-button" data-action="close-match-detail" aria-label="Close">×</button>
         </div>
-        <div class="match-detail-body">
-          <div class="table-wrap match-detail-table">
-            <table>
-              <thead><tr><th>玩家</th><th>阵营</th><th>杀/助/死</th><th>ADR</th><th>KAST</th><th>RWS</th><th>Rating</th><th>评价</th></tr></thead>
-              <tbody>${rows}</tbody>
-            </table>
-          </div>
-          ${scopeTabs}
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>玩家</th><th>阵营</th><th>杀/助/死</th><th>ADR</th><th>KAST</th><th>RWS</th><th>Rating</th><th>评价</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
         </div>
       </div>
     </div>
-  `;
-}
-
-function matchDetailScope(match) {
-  const scopes = matchAvailableScopes(match);
-  return scopes.includes(selectedMatchScope) ? selectedMatchScope : "full";
-}
-
-function matchAvailableScopes(match) {
-  return ["full", "ct", "t"].filter((scope) => matchPlayersForScope(match, scope).length);
-}
-
-function matchPlayersForScope(match, scope) {
-  if (scope === "full") return match.playerViews?.full?.length ? match.playerViews.full : (match.players || []);
-  return match.playerViews?.[scope] || [];
-}
-
-function matchScopeLabel(scope) {
-  if (scope === "ct") return "CT 半场";
-  if (scope === "t") return "T 半场";
-  return "全场";
-}
-
-function renderMatchScopeTabs(match, activeScope) {
-  const scopes = [
-    ["full", "全场", "ALL"],
-    ["ct", "CT 半场", "CT"],
-    ["t", "T 半场", "T"],
-  ];
-  return `
-    <aside class="match-scope-switcher" aria-label="对局数据视图">
-      ${scopes.map(([scope, label, mark]) => {
-        const count = matchPlayersForScope(match, scope).length;
-        return `
-          <button class="${activeScope === scope ? "active" : ""}" data-action="match-detail-scope" data-scope="${scope}" ${count ? "" : "disabled"} type="button">
-            <span>${escapeHtml(mark)}</span>
-            <strong>${escapeHtml(label)}</strong>
-            <em>${count ? `${count} 人` : "暂无"}</em>
-          </button>
-        `;
-      }).join("")}
-    </aside>
   `;
 }
 
@@ -2113,17 +2020,11 @@ document.addEventListener("click", async (event) => {
   if (action === "sync-all-matches") await syncAllMatches();
   if (action === "open-match-detail") {
     selectedMatchId = button.dataset.id;
-    selectedMatchScope = "full";
-    render();
-  }
-  if (action === "match-detail-scope") {
-    selectedMatchScope = button.dataset.scope || "full";
     render();
   }
   if (action === "close-match-detail") {
     if (button.classList.contains("modal-backdrop") && event.target !== button) return;
     selectedMatchId = "";
-    selectedMatchScope = "full";
     render();
   }
   if (action === "save-record") await saveRecord(button.dataset.id);
@@ -2449,7 +2350,7 @@ async function handleFiveELink(form) {
     .filter(Boolean);
   const profile = parse5eProfile(raw);
   member.fiveEProfileUrl = raw;
-  member.fiveEDomain = raw ? (profile.domain || member.fiveEDomain || "") : "";
+  member.fiveEDomain = profile.domain || raw;
   member.fiveEAliases = aliases;
   if (profile.uuid) member.fiveEUuid = profile.uuid;
   await saveData();
@@ -2500,16 +2401,12 @@ async function syncAllMatches() {
   try {
     const body = await api("/api/sync-matches", {
       method: "POST",
-      body: JSON.stringify({ pages: 5 }),
+      body: JSON.stringify({ page: 1 }),
     });
     data = normalizeData(body.state);
     syncStatus = "";
     stopBusyTask(false);
-    const failureText = body.listFailures || body.detailFailures || body.pendingCreated
-      ? `，列表失败 ${body.listFailures || 0} 项，详情失败 ${body.detailFailures || 0} 场，待补全 ${body.pendingCreated || 0} 场`
-      : "";
-    const gateText = body.gateFallbacks ? `，Arena详情补全 ${body.gateFallbacks} 场` : "";
-    alert(`对局同步完成：种子成员 ${body.seedMembers} 人，扫描 ${body.scannedPages || 1} 页/${body.scannedMatches} 场，新增 ${body.created} 场，更新 ${body.updated} 场，回源修复历史 ${body.refreshedExisting || 0} 场${gateText}${failureText}。`);
+    alert(`对局同步完成：种子成员 ${body.seedMembers} 人，扫描 ${body.scannedMatches} 场，新增 ${body.created} 场，更新 ${body.updated} 场，回源修复历史 ${body.refreshedExisting || 0} 场。`);
   } catch (error) {
     syncStatus = error.message;
     stopBusyTask(false);

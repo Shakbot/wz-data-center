@@ -1,67 +1,19 @@
 import { ensureSchema, isAdmin, json, readState, userFromRequest, writeState } from "./_utils.js";
 
 const FIVE_E_BASE = "https://ya-api-app.5eplay.com";
-const FIVE_E_GATE_BASE = "https://gate.5eplay.com";
-const FIVE_E_GATE_REFERER = "https://view-arena.5eplay.com/";
 
-function isLikely5eDomain(value) {
-  return /^[a-z0-9][a-z0-9_-]{2,}$/i.test(String(value || "").trim());
-}
-
-function isBlockedPathDomain(value) {
-  return /^(app|fwap|profile|player|user|csgo|share_loding_type\d*|share_loading_type\d*|data|match_data)$/i.test(String(value || "").trim());
-}
-
-function isUsable5eDomain(value) {
-  return isLikely5eDomain(value) && !isBlockedPathDomain(value);
-}
-
-function parse5eProfile(...values) {
-  const candidates = values.flat().map((value) => String(value || "").trim()).filter(Boolean);
-  let fallback = { domain: "", uuid: "", profileUrl: "" };
-  for (const raw of candidates) {
-    const parsed = parse5eProfileValue(raw);
-    if (parsed.explicitDomain) return { domain: parsed.domain, uuid: parsed.uuid, profileUrl: parsed.profileUrl };
-    fallback = {
-      domain: fallback.domain || parsed.domain,
-      uuid: fallback.uuid || parsed.uuid,
-      profileUrl: fallback.profileUrl || parsed.profileUrl,
-    };
-  }
-  return fallback;
-}
-
-function parse5eProfileValue(value) {
+function parse5eProfile(value) {
   const raw = String(value || "").trim();
   if (!raw) return { domain: "", uuid: "", profileUrl: "" };
-  const domainMatch = raw.match(/[?&#]domain=([^&#]+)/i);
-  const uuidMatch = raw.match(/[?&#]uuid=([^&#]+)/i);
-  if (domainMatch) {
-    return {
-      domain: decodeURIComponent(domainMatch[1]).trim(),
-      uuid: uuidMatch ? decodeURIComponent(uuidMatch[1]).trim() : "",
-      profileUrl: raw,
-      explicitDomain: true,
-    };
-  }
   try {
     const url = new URL(raw);
-    const hashParams = new URLSearchParams(String(url.hash || "").replace(/^#\??/, ""));
-    const uuid = url.searchParams.get("uuid") || hashParams.get("uuid") || "";
-    const explicitDomain = url.searchParams.get("domain") || hashParams.get("domain") || "";
-    const pathDomain = url.pathname
-      .split("/")
-      .map((part) => decodeURIComponent(part).trim())
-      .reverse()
-      .find(isUsable5eDomain);
     return {
-      domain: explicitDomain || pathDomain || "",
-      uuid,
+      domain: url.searchParams.get("domain") || "",
+      uuid: url.searchParams.get("uuid") || "",
       profileUrl: raw,
-      explicitDomain: Boolean(explicitDomain),
     };
   } catch {
-    return { domain: isUsable5eDomain(raw) ? raw : "", uuid: "", profileUrl: "", explicitDomain: isUsable5eDomain(raw) };
+    return { domain: raw, uuid: "", profileUrl: "" };
   }
 }
 
@@ -148,16 +100,6 @@ function normalizeUserAliases(state) {
   }
 }
 
-function normalizeFiveEProfiles(state) {
-  for (const user of state.users || []) {
-    const rawDomain = String(user.fiveEDomain || "").trim();
-    if (rawDomain && !parse5eProfile(rawDomain).domain) user.fiveEDomain = "";
-    const profile = parse5eProfile(user.fiveEProfileUrl, user.fiveEDomain);
-    if (profile.domain) user.fiveEDomain = profile.domain;
-    if (profile.uuid && !user.fiveEUuid) user.fiveEUuid = profile.uuid;
-  }
-}
-
 async function fetch5eJson(path) {
   const response = await fetch(`${FIVE_E_BASE}${path}`, {
     headers: {
@@ -169,142 +111,6 @@ async function fetch5eJson(path) {
   const body = await response.json().catch(() => null);
   if (!response.ok || !body?.success) throw new Error(body?.message || `5E 接口请求失败：${response.status}`);
   return body.data;
-}
-
-function base64FromArrayBuffer(buffer) {
-  const bytes = new Uint8Array(buffer);
-  let binary = "";
-  for (let index = 0; index < bytes.length; index += 1) binary += String.fromCharCode(bytes[index]);
-  return btoa(binary);
-}
-
-async function hmacSha256Base64(secret, text) {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(text));
-  return base64FromArrayBuffer(signature);
-}
-
-function gateSignText({ method, accept, contentMd5, contentType, signedHeaders, pathAndParameters }) {
-  const fields = {
-    HTTPMethod: method,
-    Accept: accept,
-    "Content-MD5": contentMd5,
-    "Content-Type": contentType,
-    Date: "",
-  };
-  if (signedHeaders) fields.Headers = signedHeaders;
-  fields.PathAndParameters = pathAndParameters;
-  return Object.values(fields).join("\n");
-}
-
-async function fetch5eGateJson(env, path) {
-  const secret = env?.FIVE_E_GATE_HMAC_KEY || env?.FIVE_E_GATE_SECRET || env?.FIVE_E_GATE_SIGN_KEY;
-  if (!secret) {
-    throw new Error("5E gate 详情接口需要配置 FIVE_E_GATE_HMAC_KEY 后才能回源。");
-  }
-  const method = "GET";
-  const accept = "*/*";
-  const contentMd5 = "";
-  const contentType = "";
-  const signedHeaderNames = ["Accept-Language", "Authorization"];
-  const signedHeaders = "accept-language:zh-cn\nauthorization:";
-  const signature = await hmacSha256Base64(secret, gateSignText({
-    method,
-    accept,
-    contentMd5,
-    contentType,
-    signedHeaders,
-    pathAndParameters: path,
-  }));
-  const response = await fetch(`${FIVE_E_GATE_BASE}${path}`, {
-    headers: {
-      "Accept": accept,
-      "Accept-Language": "zh-cn",
-      "Authorization": "",
-      "Content-MD5": contentMd5,
-      "Referer": FIVE_E_GATE_REFERER,
-      "User-Agent": "Mozilla/5.0",
-      "x-ca-key": "5eplay",
-      "x-ca-signature": signature,
-      "x-ca-signature-headers": signedHeaderNames.join(","),
-      "x-ca-signature-method": "HmacSHA256",
-    },
-  });
-  const body = await response.json().catch(() => null);
-  if (!response.ok || !(body?.success || body?.status || body?.code === 0)) {
-    throw new Error(body?.message || `5E gate 详情接口请求失败：${response.status}`);
-  }
-  return body.data;
-}
-
-function avatarUrl(value) {
-  const text = String(value || "").trim();
-  if (!text) return "";
-  if (/^https?:\/\//i.test(text)) return text;
-  return `https://oss-arena.5eplay.com/${text.replace(/^\/+/, "")}`;
-}
-
-function chooseArenaRating(fight = {}) {
-  const rating = Number(fight.rating);
-  if (Number.isFinite(rating) && rating > 0) return fight.rating;
-  const rating2 = Number(fight.rating2);
-  if (Number.isFinite(rating2) && rating2 > 0) return fight.rating2;
-  return fight.rating || fight.rating2 || fight.rating3 || 0;
-}
-
-function normalizeArenaFightRow(row, fightKey, fallbackTeam) {
-  const fight = row?.[fightKey] || {};
-  const userData = row?.user_info?.user_data || {};
-  const profile = userData.profile || {};
-  const steam = userData.steam || {};
-  const level = row?.level_info || {};
-  return {
-    ...fight,
-    group_id: fight.group_id || fallbackTeam,
-    team: fight.group_id || fallbackTeam,
-    uid: fight.uid || userData.uid || profile.uid || "",
-    uuid: userData.uuid || "",
-    domain: profile.domain || "",
-    username: profile.nickname || userData.username || profile.domain || "",
-    nickname: profile.nickname || userData.username || profile.domain || "",
-    player_name: profile.nickname || userData.username || profile.domain || "",
-    avatar_url: avatarUrl(profile.avatarUrl),
-    steam_id: steam.steamId || "",
-    level_name: level.level_name || level.rank || "",
-    rating: chooseArenaRating(fight),
-  };
-}
-
-function normalizeArenaMatchDetail(data) {
-  const group1 = Array.isArray(data?.group_1) ? data.group_1 : [];
-  const group2 = Array.isArray(data?.group_2) ? data.group_2 : [];
-  const group1Full = group1.map((row) => normalizeArenaFightRow(row, "fight", "1"));
-  const group2Full = group2.map((row) => normalizeArenaFightRow(row, "fight", "2"));
-  return {
-    ...data,
-    main: data?.main || {},
-    user_match_data: [...group1Full, ...group2Full],
-    group1_user_match_data: group1Full,
-    group2_user_match_data: group2Full,
-    ct_user_match_data: [
-      ...group1.map((row) => normalizeArenaFightRow(row, "fight_ct", "1")),
-      ...group2.map((row) => normalizeArenaFightRow(row, "fight_ct", "2")),
-    ],
-    t_user_match_data: [
-      ...group1.map((row) => normalizeArenaFightRow(row, "fight_t", "1")),
-      ...group2.map((row) => normalizeArenaFightRow(row, "fight_t", "2")),
-    ],
-  };
-}
-
-function detailHasPlayers(detail) {
-  return readScoreboardRows(detail || {}).length > 0;
 }
 
 function rowsWithTeam(rows, fallbackTeam = "") {
@@ -328,14 +134,6 @@ function readScoreboardRows(detail) {
   if (sideRows.length) return sideRows;
 
   return rowsWithTeam(detail.players);
-}
-
-function readPlayerViewRows(detail) {
-  return {
-    full: rowsWithTeam(detail.user_match_data).length ? rowsWithTeam(detail.user_match_data) : readScoreboardRows(detail),
-    ct: rowsWithTeam(detail.ct_user_match_data),
-    t: rowsWithTeam(detail.t_user_match_data),
-  };
 }
 
 function compactKey(value) {
@@ -369,7 +167,7 @@ function buildMemberIndexes(users) {
     }
   };
   for (const user of users) {
-    const profile = parse5eProfile(user.fiveEProfileUrl, user.fiveEDomain);
+    const profile = parse5eProfile(user.fiveEProfileUrl || user.fiveEDomain);
     if (profile.domain) byDomain.set(profile.domain, user);
     if (profile.uuid) byUuid.set(profile.uuid, user);
     if (user.fiveEUuid) byUuid.set(String(user.fiveEUuid), user);
@@ -530,19 +328,11 @@ function dedupePlayers(players) {
   return [...teamA, ...teamB, ...other].slice(0, 10);
 }
 
-function buildPlayerViews(detail, indexes) {
-  const rows = readPlayerViewRows(detail);
-  return Object.fromEntries(Object.entries(rows).map(([scope, scopeRows]) => {
-    return [scope, dedupePlayers(scopeRows.map((row) => buildPlayer(row, indexes)))];
-  }));
-}
-
 function buildMatchRecord(state, listItem, detail, indexes) {
   const main = detail.main || detail.match || {};
   const date = dateFromUnix(main.end_time || main.start_time || listItem.end_time || listItem.start_time);
   const season = findSeasonForDate(state, date);
-  const playerViews = buildPlayerViews(detail, indexes);
-  const players = playerViews.full?.length ? playerViews.full : dedupePlayers(readScoreboardRows(detail).map((row) => buildPlayer(row, indexes)));
+  const players = dedupePlayers(readScoreboardRows(detail).map((row) => buildPlayer(row, indexes)));
   const recognizedMemberCodes = [...new Set(players.filter((player) => player.memberCode).map((player) => player.memberCode))];
   const trainingMemberCodes = recognizedMemberCodes.filter((code) => isTrainingEligible(state, code));
   const group1Score = firstNumber(main, ["group1_all_score", "group1_score", "team1_score", "score1", "a_score"], firstNumber(listItem, ["group1_all_score", "group1_score", "team1_score", "score1", "a_score"]));
@@ -562,36 +352,6 @@ function buildMatchRecord(state, listItem, detail, indexes) {
     isTrainingCandidate: trainingMemberCodes.length >= 3,
     isTrainingConfirmed: false,
     players,
-    playerViews: { ...playerViews, full: players },
-    syncedAt: new Date().toISOString(),
-  };
-  record.fingerprint = matchFingerprint(record);
-  record.id = `match-${record.fingerprint}`;
-  return record;
-}
-
-function buildPendingMatchRecord(state, listItem, domains = []) {
-  const date = dateFromUnix(listItem.end_time || listItem.start_time);
-  const season = findSeasonForDate(state, date);
-  const record = {
-    matchId: listItem.match_id,
-    date,
-    endTime: String(listItem.end_time || ""),
-    startTime: String(listItem.start_time || ""),
-    map: String(listItem.map || ""),
-    mapName: String(listItem.map_name || listItem.map_desc || ""),
-    matchName: String(listItem.match_name || ""),
-    matchType: String(listItem.match_type || ""),
-    scoreA: firstNumber(listItem, ["group2_all_score", "group2_score", "team2_score", "score2", "b_score"]),
-    scoreB: firstNumber(listItem, ["group1_all_score", "group1_score", "team1_score", "score1", "a_score"]),
-    seasonId: season ? season.id : "",
-    recognizedMemberCodes: [],
-    isTrainingCandidate: false,
-    isTrainingConfirmed: false,
-    players: [],
-    playerViews: { full: [] },
-    pendingDetail: true,
-    detailDomains: [...new Set(domains.filter(Boolean))],
     syncedAt: new Date().toISOString(),
   };
   record.fingerprint = matchFingerprint(record);
@@ -602,8 +362,7 @@ function buildPendingMatchRecord(state, listItem, domains = []) {
 function matchSeedFromRecord(matchRecord, seeds) {
   const memberSeed = seeds.find((seed) => (matchRecord.recognizedMemberCodes || []).includes(seed.user.identityCode));
   const playerDomain = (matchRecord.players || []).find((player) => player.domain)?.domain || "";
-  const storedDomain = (matchRecord.detailDomains || []).find(Boolean) || "";
-  const domain = memberSeed?.profile?.domain || playerDomain || storedDomain || seeds[0]?.profile?.domain || "";
+  const domain = memberSeed?.profile?.domain || playerDomain || seeds[0]?.profile?.domain || "";
   if (!matchRecord.matchId || !domain) return null;
   return {
     domain,
@@ -618,46 +377,7 @@ function matchSeedFromRecord(matchRecord, seeds) {
       match_type: matchRecord.matchType || "",
     },
     existing: true,
-    domains: [domain, ...(matchRecord.detailDomains || [])],
   };
-}
-
-function addMatchSeed(matchSeeds, matchId, item, domain, extra = {}) {
-  if (!matchId || !domain) return;
-  const current = matchSeeds.get(matchId);
-  if (current) {
-    if (!current.domains.includes(domain)) current.domains.push(domain);
-    current.existing = current.existing || Boolean(extra.existing);
-    return;
-  }
-  matchSeeds.set(matchId, {
-    item,
-    domain,
-    domains: [domain],
-    ...extra,
-  });
-}
-
-async function fetchMatchDetailWithFallback(matchId, domains, env) {
-  const errors = [];
-  for (const domain of [...new Set(domains.filter(Boolean))]) {
-    try {
-      const detail = await fetch5eJson(`/v0/mars/api/csgo/data/player_match_info/${encodeURIComponent(matchId)}/${encodeURIComponent(domain)}`);
-      if (detailHasPlayers(detail)) return { detail, domain, errors, source: "player_match_info" };
-      errors.push(`${domain}: 旧详情接口返回空记分板`);
-    } catch (error) {
-      errors.push(`${domain}: ${error.message || String(error)}`);
-    }
-  }
-  try {
-    const arenaData = await fetch5eGateJson(env, `/cranenew/http/api/data/match/${encodeURIComponent(matchId)}`);
-    const detail = normalizeArenaMatchDetail(arenaData);
-    if (detailHasPlayers(detail)) return { detail, domain: "", errors, source: "gate_match" };
-    errors.push("gate_match: 详情接口返回空记分板");
-  } catch (error) {
-    errors.push(`gate_match: ${error.message || String(error)}`);
-  }
-  return { detail: null, domain: "", errors, source: "" };
 }
 
 function upsertPersonalRecords(state, matchRecord) {
@@ -727,47 +447,26 @@ function upsertPersonalRecords(state, matchRecord) {
   }
 }
 
-function normalizeStoredPlayer(player, indexes) {
-  if (player.memberCode) return player;
-  const member = recognizeMember({
-    domain: player.domain,
-    uuid: player.uuid,
-    username: player.nickname || player.name,
-    player_name: player.nickname || player.name,
-  }, indexes);
-  return member ? { ...player, memberCode: member.identityCode, isClubMember: true } : player;
-}
-
-function normalizeStoredPlayers(players, indexes) {
-  return dedupePlayers((Array.isArray(players) ? players : []).map((player) => normalizeStoredPlayer(player, indexes)));
-}
-
-function matchRecordCompleteness(record) {
-  const viewCount = Object.values(record.playerViews || {}).reduce((total, players) => {
-    return total + (Array.isArray(players) ? players.length : 0);
-  }, 0);
-  return ((record.players || []).length * 10) + Math.min(viewCount, 30);
-}
-
 function normalizeExistingMatches(state, indexes) {
   const byMatch = new Map();
   for (const record of state.matchRecords || []) {
-    record.players = normalizeStoredPlayers(record.players, indexes);
-    if (record.playerViews && typeof record.playerViews === "object") {
-      record.playerViews = Object.fromEntries(Object.entries(record.playerViews).map(([scope, players]) => {
-        return [scope, normalizeStoredPlayers(players, indexes)];
-      }));
-      if (!record.playerViews.full?.length && record.players.length) record.playerViews.full = record.players;
-    } else if (record.players.length) {
-      record.playerViews = { full: record.players };
-    }
+    record.players = dedupePlayers((record.players || []).map((player) => {
+      if (player.memberCode) return player;
+      const member = recognizeMember({
+        domain: player.domain,
+        uuid: player.uuid,
+        username: player.nickname || player.name,
+        player_name: player.nickname || player.name,
+      }, indexes);
+      return member ? { ...player, memberCode: member.identityCode, isClubMember: true } : player;
+    }));
     record.recognizedMemberCodes = [...new Set(record.players.filter((player) => player.memberCode).map((player) => player.memberCode))];
     record.isTrainingCandidate = record.recognizedMemberCodes.filter((code) => isTrainingEligible(state, code)).length >= 3;
     record.fingerprint = record.fingerprint || matchFingerprint(record);
     record.id = record.id || `match-${record.fingerprint}`;
     const key = record.matchId || record.fingerprint;
     const current = byMatch.get(key);
-    if (!current || matchRecordCompleteness(record) > matchRecordCompleteness(current)) {
+    if (!current || (record.players || []).length > (current.players || []).length) {
       byMatch.set(key, record);
     }
   }
@@ -844,26 +543,19 @@ export async function onRequestPost({ request, env }) {
     if (!isAdmin(actor)) return json({ error: "只有管理员可以一键同步全员对局。" }, 403);
 
     const body = await request.json().catch(() => ({}));
-    const pages = Math.max(1, Math.min(5, Number(body.pages || body.page || 5)));
+    const page = Math.max(1, Math.min(3, Number(body.page || 1)));
     normalizeUserAliases(state);
-    normalizeFiveEProfiles(state);
     const seeds = state.users
-      .map((user) => ({ user, profile: parse5eProfile(user.fiveEProfileUrl, user.fiveEDomain) }))
+      .map((user) => ({ user, profile: parse5eProfile(user.fiveEProfileUrl || user.fiveEDomain) }))
       .filter((item) => item.profile.domain);
     if (!seeds.length) return json({ error: "还没有成员绑定 5E 个人主页链接。" }, 400);
 
     const matchSeeds = new Map();
-    const listFailures = [];
     for (const seed of seeds) {
-      for (let page = 1; page <= pages; page += 1) {
-        const listData = await fetch5eJson(`/v0/mars/api/csgo/match_data/match_list?domain=${encodeURIComponent(seed.profile.domain)}&match_type=&time=&date_time=0&map_name=&page=${page}`).catch((error) => {
-          listFailures.push({ domain: seed.profile.domain, page, error: error.message || String(error) });
-          return null;
-        });
-        if (!listData) continue;
-        for (const item of (listData.match_list || []).slice(0, 20)) {
-          addMatchSeed(matchSeeds, item.match_id, item, seed.profile.domain);
-        }
+      const listData = await fetch5eJson(`/v0/mars/api/csgo/match_data/match_list?domain=${encodeURIComponent(seed.profile.domain)}&match_type=&time=&date_time=0&map_name=&page=${page}`);
+      for (const item of (listData.match_list || []).slice(0, 20)) {
+        if (!item.match_id || matchSeeds.has(item.match_id)) continue;
+        matchSeeds.set(item.match_id, { item, domain: seed.profile.domain });
       }
       seed.user.fiveEDomain = seed.profile.domain;
       if (seed.profile.uuid) seed.user.fiveEUuid = seed.profile.uuid;
@@ -878,7 +570,7 @@ export async function onRequestPost({ request, env }) {
     normalizeExistingPersonalRecords(state);
     for (const matchRecord of state.matchRecords) {
       const existingSeed = matchSeedFromRecord(matchRecord, seeds);
-      if (existingSeed) addMatchSeed(matchSeeds, matchRecord.matchId, existingSeed.item, existingSeed.domain, { existing: true });
+      if (existingSeed && !matchSeeds.has(matchRecord.matchId)) matchSeeds.set(matchRecord.matchId, existingSeed);
     }
     normalizeTrainingIncludedRecords(state);
     const existingByFingerprint = new Map(state.matchRecords.map((record) => [record.fingerprint || matchFingerprint(record), record]));
@@ -886,37 +578,14 @@ export async function onRequestPost({ request, env }) {
     let created = 0;
     let updated = 0;
     let refreshedExisting = 0;
-    let detailFailures = 0;
-    let pendingCreated = 0;
-    let gateFallbacks = 0;
-    const detailFailureSamples = [];
 
     for (const [matchId, seed] of matchSeeds.entries()) {
-      const { detail, domain, errors, source } = await fetchMatchDetailWithFallback(matchId, seed.domains || [seed.domain], env);
-      if (!detail) {
-        detailFailures += 1;
-        if (detailFailureSamples.length < 8) detailFailureSamples.push({ matchId, errors });
-        const current = existingByMatchId.get(matchId);
-        if (!current) {
-          const pending = buildPendingMatchRecord(state, seed.item, seed.domains || [seed.domain]);
-          state.matchRecords.push(pending);
-          existingByFingerprint.set(pending.fingerprint, pending);
-          existingByMatchId.set(pending.matchId, pending);
-          pendingCreated += 1;
-        } else {
-          current.pendingDetail = true;
-          current.detailDomains = [...new Set([...(current.detailDomains || []), ...(seed.domains || [seed.domain])].filter(Boolean))];
-          current.syncedAt = new Date().toISOString();
-        }
-        continue;
-      }
-      if (source === "gate_match") gateFallbacks += 1;
-      seed.domain = domain || seed.domain;
+      const detail = await fetch5eJson(`/v0/mars/api/csgo/data/player_match_info/${encodeURIComponent(matchId)}/${encodeURIComponent(seed.domain)}`).catch(() => null);
+      if (!detail) continue;
       const next = buildMatchRecord(state, seed.item, detail, indexes);
       const existing = existingByMatchId.get(next.matchId) || existingByFingerprint.get(next.fingerprint);
       if (existing) {
         Object.assign(existing, next, { isTrainingConfirmed: existing.isTrainingConfirmed || false });
-        delete existing.pendingDetail;
         existingByFingerprint.set(existing.fingerprint, existing);
         existingByMatchId.set(existing.matchId, existing);
         updated += 1;
@@ -937,13 +606,7 @@ export async function onRequestPost({ request, env }) {
     return json({
       ok: true,
       seedMembers: seeds.length,
-      scannedPages: pages,
       scannedMatches: matchSeeds.size,
-      listFailures: listFailures.length,
-      detailFailures,
-      detailFailureSamples,
-      pendingCreated,
-      gateFallbacks,
       refreshedExisting,
       created,
       updated,
