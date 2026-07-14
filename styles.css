@@ -594,6 +594,39 @@ button:disabled {
   margin-top: 14px;
 }
 
+.match-bulk-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0 12px;
+}
+
+.match-select-all,
+.match-select-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--soft);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.match-select-control {
+  justify-self: start;
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.055);
+}
+
+.match-select-all input,
+.match-select-control input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--orange-2);
+}
+
 .match-filter-row .field {
   margin: 0;
 }

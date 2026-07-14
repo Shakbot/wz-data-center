@@ -2,7 +2,7 @@ const STORE_KEY = "og-esports-club-v2";
 const SESSION_KEY = "og-esports-session-v2";
 const TOKEN_KEY = "og-esports-token-v2";
 const PREF_KEY = "og-esports-preferences-v2";
-const APP_VERSION = "8.1";
+const APP_VERSION = "8.2";
 
 const IMPORTED_RECORDS = Array.isArray(window.IMPORTED_TRAINING_RECORDS)
   ? window.IMPORTED_TRAINING_RECORDS
@@ -181,6 +181,7 @@ let booting = true;
 let syncStatus = "";
 let selectedMatchId = "";
 let selectedMatchScope = "full";
+let selectedMatchIds = new Set();
 let selectedRecordIds = new Set();
 let savingData = false;
 let saveQueue = Promise.resolve();
@@ -295,6 +296,8 @@ function normalizeData(next) {
     sliver.fiveEAliases = [...aliases];
   }
   next.matchRecords = next.matchRecords || [];
+  const liveMatchIds = new Set(next.matchRecords.map((match) => match.id || match.matchId).filter(Boolean));
+  selectedMatchIds = new Set([...selectedMatchIds].filter((id) => liveMatchIds.has(id)));
   return next;
 }
 
@@ -699,11 +702,15 @@ function noAccess() {
 
 function renderMatches() {
   const selectedMember = tabs.matchMember ? userByCode(tabs.matchMember) : null;
+  const admin = isAdmin();
   const matches = [...(data.matchRecords || [])]
     .filter((match) => !tabs.matchMember || (match.recognizedMemberCodes || []).includes(tabs.matchMember))
     .sort((a, b) => {
     return `${b.date}-${b.endTime || ""}`.localeCompare(`${a.date}-${a.endTime || ""}`);
   });
+  const visibleMatchIds = matches.map((match) => match.id || match.matchId).filter(Boolean);
+  const selectedVisibleCount = visibleMatchIds.filter((id) => selectedMatchIds.has(id)).length;
+  const allVisibleSelected = visibleMatchIds.length > 0 && selectedVisibleCount === visibleMatchIds.length;
   const rows = matches.length
     ? matches.map((match) => renderMatchCard(match)).join("")
     : `<div class="empty">${selectedMember ? `暂无包含 ${escapeHtml(selectedMember.gameId)} 的对局记录。` : "暂无对局记录。请先给成员填写 5E 个人主页链接，然后点击一键同步。"}</div>`;
@@ -722,6 +729,16 @@ function renderMatches() {
             </div>
             <button class="primary" data-action="sync-all-matches">一键同步对局</button>
           </div>
+          ${admin ? `
+            <div class="match-bulk-row">
+              <label class="match-select-all">
+                <input type="checkbox" data-action="toggle-match-select-all" ${allVisibleSelected ? "checked" : ""} ${visibleMatchIds.length ? "" : "disabled"} />
+                <span>选择当前列表</span>
+              </label>
+              <button class="danger" data-action="delete-selected-matches" ${selectedMatchIds.size ? "" : "disabled"}>批量删除已选对局</button>
+              <span class="chip">已选 ${selectedMatchIds.size} 场</span>
+            </div>
+          ` : ""}
           <div class="match-filter-row">
             <div class="field">
               <label>按成员筛选</label>
@@ -744,10 +761,12 @@ function renderMatchCard(match) {
   const season = data.seasons.find((item) => item.id === match.seasonId);
   const outcome = matchOutcome(match);
   const admin = isAdmin();
+  const matchKey = match.id || match.matchId;
   return `
     <article class="panel match-card ${outcome.className}">
       <div class="panel-body">
         <div class="match-info">
+          ${admin ? `<label class="match-select-control"><input type="checkbox" data-action="toggle-match-select" data-id="${escapeHtml(matchKey)}" ${selectedMatchIds.has(matchKey) ? "checked" : ""} /><span>选择</span></label>` : ""}
           <div class="match-card-head">
             <strong class="match-map-name">${escapeHtml(match.mapName || match.map || "Unknown Map")}</strong>
             <div class="date-line">${escapeHtml(match.date || "")} · ${escapeHtml(match.matchName || "5E 对局")} · ${season ? escapeHtml(season.shortName) : "未归属赛季"}</div>
@@ -2071,6 +2090,7 @@ document.addEventListener("click", async (event) => {
   }
   if (action === "sync-all-matches") await syncAllMatches();
   if (action === "delete-synced-match") await deleteSyncedMatch(button.dataset.id);
+  if (action === "delete-selected-matches") await deleteSelectedMatches();
   if (action === "open-match-detail") {
     selectedMatchId = button.dataset.id;
     selectedMatchScope = "full";
@@ -2127,6 +2147,18 @@ document.addEventListener("change", (event) => {
   }
   if (target.dataset.action === "pick-match-member") {
     tabs.matchMember = target.value;
+    render();
+  }
+  if (target.dataset.action === "toggle-match-select") {
+    const id = target.dataset.id;
+    if (target.checked) selectedMatchIds.add(id);
+    else selectedMatchIds.delete(id);
+    render();
+  }
+  if (target.dataset.action === "toggle-match-select-all") {
+    const ids = [...document.querySelectorAll("[data-action='toggle-match-select']")].map((input) => input.dataset.id).filter(Boolean);
+    if (target.checked) ids.forEach((id) => selectedMatchIds.add(id));
+    else ids.forEach((id) => selectedMatchIds.delete(id));
     render();
   }
 });
@@ -2460,15 +2492,15 @@ async function syncAllMatches() {
   try {
     const body = await api("/api/sync-matches", {
       method: "POST",
-      body: JSON.stringify({ pages: 5 }),
+      body: JSON.stringify({ maxPages: 100 }),
     });
     data = normalizeData(body.state);
     syncStatus = "";
     stopBusyTask(false);
-    const failureText = (body.listFailures || body.detailFailures || body.pendingCreated)
-      ? `，列表失败 ${body.listFailures || 0} 项，详情失败 ${body.detailFailures || 0} 场，待补全 ${body.pendingCreated || 0} 场`
+    const failureText = (body.listFailures || body.detailFailures)
+      ? `，列表失败 ${body.listFailures || 0} 项，详情失败 ${body.detailFailures || 0} 场`
       : "";
-    alert(`对局同步完成：种子成员 ${body.seedMembers} 人，扫描 ${body.scannedPages || 1} 页/${body.scannedMatches} 场，新增 ${body.created} 场，更新 ${body.updated} 场，回源修复历史 ${body.refreshedExisting || 0} 场${failureText}。`);
+    alert(`对局同步完成：种子成员 ${body.seedMembers} 人，最多扫描 ${body.scannedPages || 1} 页，发现 ${body.scannedMatches} 场，新增 ${body.created} 场，更新 ${body.updated} 场；arena 访问 ${body.arenaVisited || 0} 场，WAF ${body.arenaBlocked || 0} 场，arena 直接解析 ${body.arenaParsed || 0} 场${failureText}。`);
   } catch (error) {
     syncStatus = error.message;
     stopBusyTask(false);
@@ -2496,10 +2528,38 @@ async function deleteSyncedMatch(id) {
       selectedMatchId = "";
       selectedMatchScope = "full";
     }
-    syncStatus = `已删除 1 场对局，清理 ${body.removedRecords || 0} 条同步记录`;
+    selectedMatchIds.delete(match.id || match.matchId);
+    syncStatus = `已删除 ${body.removedMatches || 1} 场对局，清理 ${body.removedRecords || 0} 条同步记录`;
   } catch (error) {
     syncStatus = error.message;
     alert(`删除对局失败：${error.message}`);
+  }
+  render();
+}
+
+async function deleteSelectedMatches() {
+  const user = currentUser();
+  if (!isAdmin(user)) return alert("只有拥有全体管理权限的用户可以批量删除已同步对局。");
+  const ids = [...selectedMatchIds].filter(Boolean);
+  if (!ids.length) return alert("请先选择要删除的对局。");
+  if (!confirm(`确定批量删除已选的 ${ids.length} 场已同步对局吗？\n\n该操作会同时删除这些对局生成的 5E 同步记录，并从统计中移除。`)) return;
+  syncStatus = "正在批量删除已同步对局...";
+  render();
+  try {
+    const body = await api("/api/delete-match", {
+      method: "POST",
+      body: JSON.stringify({ ids }),
+    });
+    data = normalizeData(body.state);
+    selectedMatchIds = new Set();
+    if (selectedMatchId && !(data.matchRecords || []).some((match) => match.id === selectedMatchId || match.matchId === selectedMatchId)) {
+      selectedMatchId = "";
+      selectedMatchScope = "full";
+    }
+    syncStatus = `已删除 ${body.removedMatches || ids.length} 场对局，清理 ${body.removedRecords || 0} 条同步记录`;
+  } catch (error) {
+    syncStatus = error.message;
+    alert(`批量删除对局失败：${error.message}`);
   }
   render();
 }
