@@ -44,6 +44,7 @@ function hasOnlySelfServiceProfileChanges(previous, next) {
   if (!previous || !next) return false;
   const editableFields = new Set([
     "avatar",
+    "password",
     "fiveEProfileUrl",
     "fiveEDomain",
     "fiveEUuid",
@@ -110,7 +111,7 @@ export async function onRequestPut({ request, env }) {
     if (!body.state) return json({ error: "缺少要保存的数据。" }, 400);
 
     if (!isAdmin(actor) && !hasOnlyAllowedUserChanges(state?.users, body.state.users, session.identity_code)) {
-      return json({ error: "普通成员不能修改自己的账号密码、身份或权限信息。" }, 403);
+      return json({ error: "普通成员只能修改自己的密码、头像和 5E 资料。" }, 403);
     }
 
     await persistAndCompactMatchDetails(env.DB, body.state);
