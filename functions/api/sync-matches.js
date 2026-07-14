@@ -1,7 +1,7 @@
 import { ensureSchema, isAdmin, json, readMatchCatalog, readState, readSyncContext, userFromRequest, writeMatchCatalog, writeMatchDetail, writeState, writeSyncContext } from "./_utils.js";
 
 const FIVE_E_BASE = "https://ya-api-app.5eplay.com";
-const SYNC_VERSION = "8.4";
+const SYNC_VERSION = "8.5 Omega";
 const SYNC_ROLES = new Set([
   "总教练",
   "常务副总教练",
@@ -72,6 +72,12 @@ function dateFromUnix(value) {
   const stamp = toNumber(value);
   if (!stamp) return new Date().toISOString().slice(0, 10);
   return new Date(stamp * 1000).toISOString().slice(0, 10);
+}
+
+function unixSeconds(value) {
+  const stamp = toNumber(value);
+  if (!stamp) return 0;
+  return stamp > 10_000_000_000 ? Math.floor(stamp / 1000) : Math.floor(stamp);
 }
 
 function normalizeName(value) {
@@ -768,6 +774,12 @@ async function syncCatalogPage(body, env, session) {
   if (!isAdmin(actor)) return json({ error: "只有管理员可以建立全量对局目录。" }, 403);
 
   const requestedCursor = body.cursor && typeof body.cursor === "object" ? body.cursor : {};
+  const syncMode = (body.syncMode || requestedCursor.syncMode) === "recent24h" ? "recent24h" : "all";
+  const requestedCutoff = Number(requestedCursor.cutoffEpoch || body.cutoffEpoch || 0);
+  const cutoffEpoch = syncMode === "recent24h"
+    ? Math.max(0, Math.floor(requestedCutoff || (Date.now() / 1000) - 24 * 60 * 60))
+    : 0;
+  const cursorMeta = syncMode === "recent24h" ? { syncMode, cutoffEpoch } : {};
   const memberIndex = Math.max(0, Math.floor(Number(requestedCursor.memberIndex || 0)));
   const page = Math.max(1, Math.floor(Number(requestedCursor.page || 1)));
   const seeds = state.users
@@ -800,7 +812,7 @@ async function syncCatalogPage(body, env, session) {
         domain: seed.profile.domain,
         error: error.message || String(error),
       }],
-      nextCursor: { memberIndex: memberIndex + 1, page: 1 },
+      nextCursor: { memberIndex: memberIndex + 1, page: 1, ...cursorMeta },
       created: 0,
       merged: 0,
       pending: 0,
@@ -808,12 +820,19 @@ async function syncCatalogPage(body, env, session) {
     });
   }
 
-  const pageItems = [...new Map((Array.isArray(listData?.match_list) ? listData.match_list : [])
+  const rawPageItems = [...new Map((Array.isArray(listData?.match_list) ? listData.match_list : [])
     .filter((item) => item?.match_id)
     .map((item) => [String(item.match_id), item])).values()];
-  const pageSignature = pageItems.map((item) => item.match_id).join(",");
-  const repeatedPage = Boolean(pageItems.length && requestedCursor.previousPageSignature === pageSignature);
-  const memberFinished = pageItems.length === 0 || repeatedPage;
+  const pageItems = syncMode === "recent24h"
+    ? rawPageItems.filter((item) => unixSeconds(item.end_time || item.start_time) >= cutoffEpoch)
+    : rawPageItems;
+  const pageSignature = rawPageItems.map((item) => item.match_id).join(",");
+  const repeatedPage = Boolean(rawPageItems.length && requestedCursor.previousPageSignature === pageSignature);
+  const reachedWindowBoundary = syncMode === "recent24h" && rawPageItems.some((item) => {
+    const stamp = unixSeconds(item.end_time || item.start_time);
+    return stamp > 0 && stamp < cutoffEpoch;
+  });
+  const memberFinished = rawPageItems.length === 0 || repeatedPage || reachedWindowBoundary;
   const catalogMatches = await readMatchCatalog(env.DB, pageItems.map((item) => String(item.match_id)));
   const existingByMatchId = new Map();
   for (const catalogMatch of catalogMatches) {
@@ -839,8 +858,8 @@ async function syncCatalogPage(body, env, session) {
   }
 
   const nextCursor = memberFinished
-    ? { memberIndex: memberIndex + 1, page: 1 }
-    : { memberIndex, page: page + 1, previousPageSignature: pageSignature };
+    ? { memberIndex: memberIndex + 1, page: 1, ...cursorMeta }
+    : { memberIndex, page: page + 1, previousPageSignature: pageSignature, ...cursorMeta };
   const done = nextCursor.memberIndex >= seeds.length;
   await writeMatchCatalog(env.DB, changedMatches);
   return json({
@@ -848,6 +867,8 @@ async function syncCatalogPage(body, env, session) {
     done,
     seedMembers: seeds.length,
     syncVersion: SYNC_VERSION,
+    syncMode,
+    windowStartAt: cutoffEpoch ? new Date(cutoffEpoch * 1000).toISOString() : "",
     memberIndex,
     memberCode: seed.user.identityCode,
     memberName: seed.user.gameId || seed.user.name || seed.user.identityCode,

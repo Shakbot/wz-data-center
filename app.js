@@ -2,7 +2,7 @@ const STORE_KEY = "og-esports-club-v2";
 const SESSION_KEY = "og-esports-session-v2";
 const TOKEN_KEY = "og-esports-token-v2";
 const PREF_KEY = "og-esports-preferences-v2";
-const APP_VERSION = "8.4";
+const APP_VERSION = "8.5 Omega";
 
 const IMPORTED_RECORDS = Array.isArray(window.IMPORTED_TRAINING_RECORDS)
   ? window.IMPORTED_TRAINING_RECORDS
@@ -54,7 +54,7 @@ const TEXT = {
     password: "密码",
     defaultPassword: "使用统一身份识别码登入",
     exportData: "导出平台数据",
-    themeSwitch: "明暗风格",
+    themeSwitch: "色彩风格",
     languageSwitch: "语言切换",
     dashboard: "数据总览",
     team: "团队总览",
@@ -68,8 +68,8 @@ const TEXT = {
     network: "网络矩阵",
     logout: "退出登录",
     reset: "重置云端数据",
-    theme: "明色",
-    dark: "暗色",
+    theme: "橙金",
+    dark: "蔚蓝",
     language: "EN",
     currentId: "当前 ID",
     name: "姓名",
@@ -116,7 +116,7 @@ const TEXT = {
     password: "Password",
     defaultPassword: "Sign in with unified identity code",
     exportData: "Export Platform Data",
-    themeSwitch: "Theme",
+    themeSwitch: "Color Style",
     languageSwitch: "Language",
     dashboard: "Dashboard",
     team: "Team",
@@ -129,8 +129,8 @@ const TEXT = {
     announcements: "Announcements",
     logout: "Sign Out",
     reset: "Reset Cloud Data",
-    theme: "Light",
-    dark: "Dark",
+    theme: "Orange",
+    dark: "Azure",
     language: "中文",
     currentId: "Current ID",
     name: "Name",
@@ -236,9 +236,15 @@ function t(key) {
 
 function loadPreferences() {
   try {
-    return { theme: "dark", ...JSON.parse(localStorage.getItem(PREF_KEY) || "{}"), lang: "zh" };
+    const saved = JSON.parse(localStorage.getItem(PREF_KEY) || "{}");
+    return {
+      ...saved,
+      lang: saved.lang || "zh",
+      theme: "dark",
+      colorTheme: saved.colorTheme === "azure" ? "azure" : "orange",
+    };
   } catch {
-    return { lang: "zh", theme: "dark" };
+    return { lang: "zh", theme: "dark", colorTheme: "orange" };
   }
 }
 
@@ -247,7 +253,8 @@ function savePreferences() {
 }
 
 function applyTheme() {
-  document.body.dataset.theme = preferences.theme;
+  document.body.dataset.theme = "dark";
+  document.body.dataset.colorTheme = preferences.colorTheme === "azure" ? "azure" : "orange";
   document.documentElement.lang = preferences.lang === "zh" ? "zh-CN" : "en";
 }
 
@@ -545,6 +552,7 @@ function parse5eProfile(value) {
 function render() {
   if (booting) {
     document.body.dataset.theme = "dark";
+    document.body.dataset.colorTheme = "orange";
     document.body.dataset.login = "true";
     app.innerHTML = `
       <section class="login-page">
@@ -558,6 +566,7 @@ function render() {
   const user = currentUser();
   if (!user) {
     document.body.dataset.theme = "dark";
+    document.body.dataset.colorTheme = "orange";
     document.body.dataset.login = "true";
     renderLogin();
     return;
@@ -591,7 +600,7 @@ function render() {
           ${navButton("network", "network", t("network"))}
         </nav>
         <div class="sidebar-footer">
-          ${toggleControl("toggle-theme", t("themeSwitch"), preferences.theme === "dark" ? t("theme") : t("dark"), "theme", preferences.theme === "light")}
+          ${toggleControl("toggle-color-theme", t("themeSwitch"), preferences.colorTheme === "azure" ? t("dark") : t("theme"), "theme", preferences.colorTheme === "azure")}
           <button class="ghost export-button" data-action="export-data">${navIcon("records")}<span>${t("exportData")}</span></button>
           <button class="danger" data-action="logout">${t("logout")}</button>
         </div>
@@ -612,7 +621,7 @@ function render() {
           </div>
           <div class="top-actions">
             ${syncStatus ? `<span class="sync-error">${escapeHtml(syncStatus)}</span>` : ""}
-            ${toggleControl("toggle-theme", t("themeSwitch"), preferences.theme === "dark" ? t("theme") : t("dark"), "theme", preferences.theme === "light")}
+            ${toggleControl("toggle-color-theme", t("themeSwitch"), preferences.colorTheme === "azure" ? t("dark") : t("theme"), "theme", preferences.colorTheme === "azure")}
           </div>
         </div>
         ${renderView(user)}
@@ -647,7 +656,7 @@ function navIcon(icon) {
 function toggleControl(action, label, value, icon, active) {
   const icons = {
     lang: '<path d="M4 5h10M9 3v2m-3 0c.5 3.8 3.2 6.8 7 8.5M13 5c-.7 3.1-2.7 5.8-6 8m8 8 4-10 4 10m-6.8-3h5.6"/>',
-    theme: '<path d="M12 3a9 9 0 1 0 9 9c-4 1.2-8.2-2.4-9-9Z"/>',
+    theme: '<path d="M12 3a9 9 0 1 0 9 9c0-1.1.9-2 2-2h1.2a2.8 2.8 0 0 0 0-5.6H12Z"/><circle cx="7.5" cy="10" r=".8"/><circle cx="9.5" cy="6.5" r=".8"/><circle cx="14" cy="6.3" r=".8"/>',
   };
   return `
     <button class="toggle-control ${active ? "active" : ""}" data-action="${action}" type="button">
@@ -761,7 +770,10 @@ function renderMatches() {
               <strong>一键同步所有成员参与的 5E 对局</strong>
               <div class="date-line">遍历指定角色成员的全部历史战绩，按 matchID 合并为待完善条目；单场详情由“再同步”独立获取。</div>
             </div>
-            <button class="primary" data-action="sync-all-matches">一键同步对局</button>
+            <div class="sync-actions">
+              <button class="primary" data-action="sync-all-matches">一键同步对局</button>
+              <button class="ghost" data-action="sync-recent-matches">同步24小时内对局</button>
+            </div>
           </div>
           <div class="match-filter-row">
             <div class="field">
@@ -2032,8 +2044,8 @@ document.addEventListener("click", async (event) => {
     localStorage.removeItem(TOKEN_KEY);
     render();
   }
-  if (action === "toggle-theme") {
-    preferences.theme = preferences.theme === "dark" ? "light" : "dark";
+  if (action === "toggle-color-theme") {
+    preferences.colorTheme = preferences.colorTheme === "azure" ? "orange" : "azure";
     savePreferences();
     render();
   }
@@ -2096,6 +2108,7 @@ document.addEventListener("click", async (event) => {
     if (season) await promoteTraining(null, season);
   }
   if (action === "sync-all-matches") await syncAllMatches();
+  if (action === "sync-recent-matches") await syncRecentMatches();
   if (action === "resync-match") await resyncMatch(button.dataset.id);
   if (action === "delete-selected-matches") await deleteSelectedMatches();
   if (action === "open-match-detail") await openMatchDetail(button.dataset.id);
@@ -2510,12 +2523,16 @@ async function openMatchDetail(matchKey) {
   render();
 }
 
-async function syncAllMatches() {
-  startBusyTask("正在建立全量对局目录", SYNC_BUSY_LINES);
-  syncStatus = "正在遍历指定角色成员的全部 5E 历史战绩，只记录场次信息...";
+async function syncMatchCatalog({ syncMode = "all" } = {}) {
+  const recentOnly = syncMode === "recent24h";
+  const scopeLabel = recentOnly ? "24 小时内" : "全量";
+  startBusyTask(`正在建立${scopeLabel}对局目录`, SYNC_BUSY_LINES);
+  syncStatus = recentOnly
+    ? "正在遍历指定角色成员最近 24 小时的全部 5E 战绩，只记录场次信息..."
+    : "正在遍历指定角色成员的全部 5E 历史战绩，只记录场次信息...";
   render();
   try {
-    let cursor = { memberIndex: 0, page: 1 };
+    let cursor = { memberIndex: 0, page: 1, ...(recentOnly ? { syncMode: "recent24h" } : {}) };
     const totals = {
       scanned: 0,
       created: 0,
@@ -2533,12 +2550,12 @@ async function syncAllMatches() {
       let batchAttempt = 0;
       while (batchAttempt < 3) {
         batchAttempt += 1;
-        syncStatus = `正在读取第 ${cursor.memberIndex + 1} 位成员，第 ${cursor.page} 页历史战绩${batchAttempt > 1 ? `（重试 ${batchAttempt - 1}/2）` : ""}...`;
+        syncStatus = `正在读取第 ${cursor.memberIndex + 1} 位成员，第 ${cursor.page} 页${recentOnly ? "近期" : "历史"}战绩${batchAttempt > 1 ? `（重试 ${batchAttempt - 1}/2）` : ""}...`;
         render();
         try {
           body = await api("/api/sync-matches", {
             method: "POST",
-            body: JSON.stringify({ cursor }),
+            body: JSON.stringify({ cursor, syncMode }),
           });
         } catch (error) {
           if (batchAttempt >= 3) throw error;
@@ -2568,13 +2585,21 @@ async function syncAllMatches() {
     stopBusyTask(false);
     const pending = (data.matchRecords || []).filter((match) => !matchHasCompleteDetails(match)).length;
     const failureText = totals.memberFailures.size ? `；${totals.memberFailures.size} 位成员主页暂时无法读取` : "";
-    alert(`对局目录同步完成：扫描 ${totals.scanned} 条成员战绩，新增 ${totals.created} 场，合并重复记录 ${totals.merged} 条；当前待完善 ${pending} 场${failureText}。`);
+    alert(`${scopeLabel}对局目录同步完成：扫描 ${totals.scanned} 条成员战绩，新增 ${totals.created} 场，合并重复记录 ${totals.merged} 条；当前待完善 ${pending} 场${failureText}。`);
   } catch (error) {
     syncStatus = error.message;
     stopBusyTask(false);
-    alert(`对局同步失败：${error.message}`);
+    alert(`${scopeLabel}对局同步失败：${error.message}`);
   }
   render();
+}
+
+async function syncAllMatches() {
+  return syncMatchCatalog({ syncMode: "all" });
+}
+
+async function syncRecentMatches() {
+  return syncMatchCatalog({ syncMode: "recent24h" });
 }
 
 async function resyncMatch(matchId) {

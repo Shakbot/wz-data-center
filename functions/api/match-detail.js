@@ -11,8 +11,8 @@ export async function onRequestGet({ request, env }) {
     if (!matchId) return json({ error: "缺少 matchID。" }, 400);
     const detail = await readMatchDetail(env.DB, matchId);
     if (!detail) return json({ error: "该场对局尚未同步详细数据。" }, 404);
-    return json({ ok: true, matchId, detail, syncVersion: "8.4" });
+    return json({ ok: true, matchId, detail, syncVersion: "8.5 Omega" });
   } catch (error) {
-    return json({ error: error.message || String(error), syncVersion: "8.4" }, 500);
+    return json({ error: error.message || String(error), syncVersion: "8.5 Omega" }, 500);
   }
 }
