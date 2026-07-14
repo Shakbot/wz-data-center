@@ -2453,7 +2453,7 @@ async function syncAllMatches() {
     const visitedCursors = new Set();
 
     while (true) {
-      const cursorKey = `${cursor.memberIndex}:${cursor.page}`;
+      const cursorKey = `${cursor.memberIndex}:${cursor.page}:${cursor.offset || 0}`;
       if (visitedCursors.has(cursorKey)) throw new Error("同步游标没有前进，请稍后重试。");
       visitedCursors.add(cursorKey);
 
@@ -2463,7 +2463,8 @@ async function syncAllMatches() {
       let batchUpdated = 0;
       while (batchAttempt < 3) {
         batchAttempt += 1;
-        syncStatus = `正在同步第 ${cursor.memberIndex + 1} 位成员，第 ${cursor.page} 页历史战绩${batchAttempt > 1 ? `（重试 ${batchAttempt - 1}/2）` : ""}...`;
+        const offsetText = cursor.offset ? `，第 ${cursor.offset + 1} 条起` : "";
+        syncStatus = `正在同步第 ${cursor.memberIndex + 1} 位成员，第 ${cursor.page} 页历史战绩${offsetText}${batchAttempt > 1 ? `（重试 ${batchAttempt - 1}/2）` : ""}...`;
         render();
         try {
           body = await api("/api/sync-matches", {

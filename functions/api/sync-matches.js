@@ -2,6 +2,7 @@ import { ensureSchema, isAdmin, json, readState, userFromRequest, writeState } f
 
 const FIVE_E_BASE = "https://ya-api-app.5eplay.com";
 const DETAIL_CONCURRENCY = 4;
+const DETAIL_BATCH_SIZE = 5;
 const SYNC_ROLES = new Set([
   "总教练",
   "常务副总教练",
@@ -580,6 +581,7 @@ export async function onRequestPost({ request, env }) {
     const requestedCursor = body.cursor && typeof body.cursor === "object" ? body.cursor : {};
     const memberIndex = Math.max(0, Math.floor(Number(requestedCursor.memberIndex || 0)));
     const page = Math.max(1, Math.floor(Number(requestedCursor.page || 1)));
+    const offset = Math.max(0, Math.floor(Number(requestedCursor.offset || 0)));
     normalizeUserAliases(state);
     const seeds = state.users
       .map((user) => ({ user, profile: resolve5eProfile(user) }))
@@ -611,8 +613,9 @@ export async function onRequestPost({ request, env }) {
     let created = 0;
     let updated = 0;
     let skippedComplete = 0;
+    const pageSlice = pageItems.slice(offset, offset + DETAIL_BATCH_SIZE);
     const detailQueue = [];
-    for (const item of pageItems) {
+    for (const item of pageSlice) {
       const existing = existingByMatchId.get(item.match_id);
       if (hasCompleteDetail(existing)) {
         skippedComplete += 1;
@@ -633,7 +636,7 @@ export async function onRequestPost({ request, env }) {
     });
 
     const failures = [];
-    const completedMatchIds = pageItems
+    const completedMatchIds = pageSlice
       .filter((item) => hasCompleteDetail(existingByMatchId.get(item.match_id)))
       .map((item) => item.match_id);
     for (const result of detailResults) {
@@ -662,12 +665,15 @@ export async function onRequestPost({ request, env }) {
     normalizeExistingPersonalRecords(state);
 
     const pageSignature = pageItems.map((item) => item.match_id).join(",");
-    const repeatedPage = Boolean(pageItems.length && requestedCursor.previousPageSignature === pageSignature);
+    const repeatedPage = Boolean(pageItems.length && offset === 0 && requestedCursor.previousPageSignature === pageSignature);
+    const pageHasMoreWork = offset + DETAIL_BATCH_SIZE < pageItems.length;
     const memberFinished = pageItems.length === 0 || repeatedPage;
     if (memberFinished) seed.user.fiveELastSyncAt = new Date().toISOString();
     const nextCursor = memberFinished
       ? { memberIndex: memberIndex + 1, page: 1 }
-      : { memberIndex, page: page + 1, previousPageSignature: pageSignature };
+      : pageHasMoreWork
+        ? { memberIndex, page, offset: offset + DETAIL_BATCH_SIZE, previousPageSignature: pageSignature }
+        : { memberIndex, page: page + 1, offset: 0, previousPageSignature: pageSignature };
     const done = nextCursor.memberIndex >= seeds.length;
 
     await writeState(env.DB, state);
@@ -679,6 +685,8 @@ export async function onRequestPost({ request, env }) {
       memberCode: seed.user.identityCode,
       memberName: seed.user.gameId || seed.user.name || seed.user.identityCode,
       page,
+      offset,
+      remainingPageDetails: Math.max(0, pageItems.length - offset - DETAIL_BATCH_SIZE),
       scannedMatches: pageItems.length,
       attemptedDetails: detailQueue.length,
       skippedComplete,
