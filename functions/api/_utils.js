@@ -21,6 +21,37 @@ export async function ensureSchema(db) {
   await db
     .prepare("CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, identity_code TEXT NOT NULL, created_at TEXT NOT NULL)")
     .run();
+  await db
+    .prepare("CREATE TABLE IF NOT EXISTS match_details (match_id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at TEXT NOT NULL)")
+    .run();
+}
+
+export async function readMatchDetail(db, matchId) {
+  const row = await db
+    .prepare("SELECT payload FROM match_details WHERE match_id = ?")
+    .bind(String(matchId || ""))
+    .first();
+  return row?.payload ? JSON.parse(row.payload) : null;
+}
+
+export async function writeMatchDetail(db, matchId, detail) {
+  const updatedAt = new Date().toISOString();
+  await db.prepare(`
+    INSERT INTO match_details (match_id, payload, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(match_id) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at
+  `)
+    .bind(String(matchId || ""), JSON.stringify(detail), updatedAt)
+    .run();
+}
+
+export async function deleteMatchDetails(db, matchIds) {
+  const ids = [...new Set((matchIds || []).map(String).filter(Boolean))];
+  for (let offset = 0; offset < ids.length; offset += 50) {
+    const batch = ids.slice(offset, offset + 50);
+    const placeholders = batch.map(() => "?").join(",");
+    await db.prepare(`DELETE FROM match_details WHERE match_id IN (${placeholders})`).bind(...batch).run();
+  }
 }
 
 export async function readState(db) {

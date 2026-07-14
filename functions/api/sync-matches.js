@@ -1,7 +1,7 @@
-import { ensureSchema, isAdmin, json, readState, userFromRequest, writeState } from "./_utils.js";
+import { ensureSchema, isAdmin, json, readState, userFromRequest, writeMatchDetail, writeState } from "./_utils.js";
 
 const FIVE_E_BASE = "https://ya-api-app.5eplay.com";
-const SYNC_VERSION = "8.3 Delta";
+const SYNC_VERSION = "8.4";
 const SYNC_ROLES = new Set([
   "总教练",
   "常务副总教练",
@@ -229,6 +229,7 @@ function mergeSummaryRecord(existing, summary) {
     ctPlayers: existing.ctPlayers,
     tPlayers: existing.tPlayers,
     detailStatus: existing.detailStatus,
+    hasSideDetails: existing.hasSideDetails,
     detailPlayerCount: existing.detailPlayerCount,
     detailSyncedAt: existing.detailSyncedAt,
     syncedAt: existing.syncedAt,
@@ -462,6 +463,7 @@ function buildMatchRecord(state, listItem, detail, indexes, seedUser) {
     ctPlayers,
     tPlayers,
     detailStatus: "complete",
+    hasSideDetails: true,
     detailPlayerCount: sourceRows.length,
     detailUrl: listItem.detailUrl || `https://arena.5eplay.com/data/match/${encodeURIComponent(listItem.match_id || listItem.matchId)}`,
     detailSyncedAt: new Date().toISOString(),
@@ -476,14 +478,28 @@ function buildMatchRecord(state, listItem, detail, indexes, seedUser) {
 }
 
 function hasCompleteDetail(record) {
+  const hasSideData = Boolean(record?.hasSideDetails)
+    || (Array.isArray(record?.ctPlayers) && record.ctPlayers.length > 0
+      && Array.isArray(record?.tPlayers) && record.tPlayers.length > 0);
   return record?.detailStatus === "complete"
     && Number(record.detailPlayerCount || 0) > 0
     && Array.isArray(record.players)
     && record.players.length > 0
-    && Array.isArray(record.ctPlayers)
-    && record.ctPlayers.length > 0
-    && Array.isArray(record.tPlayers)
-    && record.tPlayers.length > 0;
+    && hasSideData;
+}
+
+function summaryForClient(record) {
+  const { players, ctPlayers, tPlayers, ...summary } = record;
+  return summary;
+}
+
+function personalRecordsForMatch(state, matchRecord) {
+  const keys = new Set([matchRecord.matchId, matchRecord.id, matchRecord.fingerprint].filter(Boolean));
+  return (state.records || []).filter((record) => {
+    return [record.fiveE?.matchId, record.fiveE?.matchRecordId, record.fiveE?.fingerprint]
+      .filter(Boolean)
+      .some((key) => keys.has(key));
+  });
 }
 
 function upsertPersonalRecords(state, matchRecord) {
@@ -606,6 +622,7 @@ function normalizeExistingMatches(state, indexes) {
     preferred.recognizedMemberCodes = uniqueStrings(preferred.recognizedMemberCodes || [], secondary.recognizedMemberCodes || []);
     preferred.discoveredByMemberCodes = uniqueStrings(preferred.discoveredByMemberCodes || [], secondary.discoveredByMemberCodes || []);
     preferred.discoveredByDomains = uniqueStrings(preferred.discoveredByDomains || [], secondary.discoveredByDomains || []);
+    preferred.hasSideDetails = Boolean(preferred.hasSideDetails || secondary.hasSideDetails);
     if (!(preferred.ctPlayers || []).length && (secondary.ctPlayers || []).length) preferred.ctPlayers = secondary.ctPlayers;
     if (!(preferred.tPlayers || []).length && (secondary.tPlayers || []).length) preferred.tPlayers = secondary.tPlayers;
     if (hasCompleteDetail(secondary) && !hasCompleteDetail(preferred)) {
@@ -751,15 +768,30 @@ export async function onRequestPost({ request, env }) {
 
     if (body.matchId) {
       const result = await syncSingleMatch(state, String(body.matchId));
+      if (result.error) {
+        await writeState(env.DB, state);
+        return json({ error: result.error, matchId: body.matchId, syncVersion: SYNC_VERSION }, result.status || 500);
+      }
+      const clientMatch = JSON.parse(JSON.stringify(result.match));
+      await writeMatchDetail(env.DB, result.match.matchId, {
+        players: clientMatch.players,
+        ctPlayers: clientMatch.ctPlayers,
+        tPlayers: clientMatch.tPlayers,
+        detailSyncedAt: clientMatch.detailSyncedAt,
+      });
+      result.match.hasSideDetails = true;
+      result.match.ctPlayers = [];
+      result.match.tPlayers = [];
       await writeState(env.DB, state);
-      if (result.error) return json({ error: result.error, matchId: body.matchId, syncVersion: SYNC_VERSION }, result.status || 500);
       return json({
         ok: true,
         matchId: result.match.matchId,
         detailStatus: result.match.detailStatus,
-        fullPlayers: result.match.players.length,
-        ctPlayers: result.match.ctPlayers.length,
-        tPlayers: result.match.tPlayers.length,
+        fullPlayers: clientMatch.players.length,
+        ctPlayers: clientMatch.ctPlayers.length,
+        tPlayers: clientMatch.tPlayers.length,
+        match: clientMatch,
+        records: personalRecordsForMatch(state, result.match),
         syncVersion: SYNC_VERSION,
       });
     }
@@ -772,7 +804,7 @@ export async function onRequestPost({ request, env }) {
       .filter((item) => SYNC_ROLES.has(String(item.user.role || "").trim()) && item.profile.domain);
     if (!seeds.length) return json({ error: "指定角色中还没有成员绑定 5E 个人主页链接。" }, 400);
     if (memberIndex >= seeds.length) {
-      return json({ ok: true, done: true, seedMembers: seeds.length, syncVersion: SYNC_VERSION });
+      return json({ ok: true, done: true, seedMembers: seeds.length, matches: [], syncVersion: SYNC_VERSION });
     }
 
     const seed = seeds[memberIndex];
@@ -801,6 +833,7 @@ export async function onRequestPost({ request, env }) {
         created: 0,
         merged: 0,
         pending: 0,
+        matches: [],
       });
     }
 
@@ -855,6 +888,7 @@ export async function onRequestPost({ request, env }) {
       created,
       merged,
       pending: pageItems.filter((item) => !hasCompleteDetail(existingByMatchId.get(String(item.match_id)))).length,
+      matches: pageItems.map((item) => summaryForClient(existingByMatchId.get(String(item.match_id)))),
     });
   } catch (error) {
     return json({ error: error.message || String(error), syncVersion: SYNC_VERSION }, 500);

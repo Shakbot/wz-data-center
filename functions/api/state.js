@@ -1,4 +1,19 @@
-import { ensureSchema, isAdmin, json, readState, userFromRequest, writeState } from "./_utils.js";
+import { ensureSchema, isAdmin, json, readState, userFromRequest, writeMatchDetail, writeState } from "./_utils.js";
+
+async function persistAndCompactMatchDetails(db, state) {
+  for (const match of state.matchRecords || []) {
+    if (!(match.ctPlayers || []).length || !(match.tPlayers || []).length || !match.matchId) continue;
+    await writeMatchDetail(db, match.matchId, {
+      players: match.players || [],
+      ctPlayers: match.ctPlayers,
+      tPlayers: match.tPlayers,
+      detailSyncedAt: match.detailSyncedAt || new Date().toISOString(),
+    });
+    match.hasSideDetails = true;
+    match.ctPlayers = [];
+    match.tPlayers = [];
+  }
+}
 
 export async function onRequestGet({ request, env }) {
   try {
@@ -34,6 +49,7 @@ export async function onRequestPut({ request, env }) {
       return json({ error: "普通成员不能修改自己的身份或权限信息。" }, 403);
     }
 
+    await persistAndCompactMatchDetails(env.DB, body.state);
     await writeState(env.DB, body.state);
     return json({ ok: true, state: body.state });
   } catch (error) {

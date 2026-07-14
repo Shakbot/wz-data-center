@@ -1,6 +1,6 @@
-import { ensureSchema, isAdmin, json, readState, userFromRequest, writeState } from "./_utils.js";
+import { deleteMatchDetails, ensureSchema, isAdmin, json, readState, userFromRequest, writeState } from "./_utils.js";
 
-const SYNC_VERSION = "8.3 Delta";
+const SYNC_VERSION = "8.4";
 
 function collectRequestKeys(body) {
   const keys = new Set();
@@ -56,6 +56,7 @@ export async function onRequestPost({ request, env }) {
 
     const keptMatches = [];
     const deletedKeys = new Set();
+    const deletedMatchIds = [];
     let removedMatches = 0;
 
     for (const match of state.matchRecords || []) {
@@ -66,6 +67,7 @@ export async function onRequestPost({ request, env }) {
         continue;
       }
       removedMatches += 1;
+      if (match.matchId) deletedMatchIds.push(match.matchId);
       for (const key of matchKeys) deletedKeys.add(key);
     }
 
@@ -78,6 +80,7 @@ export async function onRequestPost({ request, env }) {
     });
     const removedRecords = beforeRecords - state.records.length;
 
+    await deleteMatchDetails(env.DB, deletedMatchIds);
     await writeState(env.DB, state);
 
     return json({

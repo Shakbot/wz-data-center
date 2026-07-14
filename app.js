@@ -2,7 +2,7 @@ const STORE_KEY = "og-esports-club-v2";
 const SESSION_KEY = "og-esports-session-v2";
 const TOKEN_KEY = "og-esports-token-v2";
 const PREF_KEY = "og-esports-preferences-v2";
-const APP_VERSION = "8.3 Delta";
+const APP_VERSION = "8.4";
 
 const IMPORTED_RECORDS = Array.isArray(window.IMPORTED_TRAINING_RECORDS)
   ? window.IMPORTED_TRAINING_RECORDS
@@ -299,6 +299,40 @@ function normalizeData(next) {
   const liveMatchIds = new Set(next.matchRecords.map((match) => match.id || match.matchId).filter(Boolean));
   selectedMatchIds = new Set([...selectedMatchIds].filter((id) => liveMatchIds.has(id)));
   return next;
+}
+
+function matchHasCompleteDetails(match) {
+  const hasSideData = Boolean(match?.hasSideDetails)
+    || ((match?.ctPlayers || []).length > 0 && (match?.tPlayers || []).length > 0);
+  return match?.detailStatus === "complete" && (match?.players || []).length > 0 && hasSideData;
+}
+
+function mergeMatchUpdates(updates) {
+  const byMatchId = new Map((data.matchRecords || []).map((match) => [String(match.matchId || match.id || ""), match]));
+  for (const update of updates || []) {
+    if (!update) continue;
+    const key = String(update.matchId || update.id || "");
+    const existing = byMatchId.get(key);
+    if (existing) {
+      Object.assign(existing, update);
+      continue;
+    }
+    const created = { players: [], ctPlayers: [], tPlayers: [], ...update };
+    data.matchRecords.push(created);
+    byMatchId.set(key, created);
+  }
+}
+
+function replaceLocalPersonalRecords(match, records) {
+  if (!match) return;
+  const matchKeys = new Set([match.matchId, match.id, match.fingerprint].filter(Boolean));
+  data.records = (data.records || []).filter((record) => {
+    const recordKeys = [record.fiveE?.matchId, record.fiveE?.matchRecordId, record.fiveE?.fingerprint].filter(Boolean);
+    const belongs = recordKeys.some((key) => matchKeys.has(key));
+    const isAuto = record.source === "5e-match-sync" || record.createdBy === "5e-sync";
+    return !(belongs && isAuto);
+  });
+  data.records.push(...(records || []));
 }
 
 function saveData() {
@@ -762,10 +796,7 @@ function renderMatchCard(match) {
   const outcome = matchOutcome(match);
   const matchKey = match.id || match.matchId;
   const admin = isAdmin();
-  const detailComplete = match.detailStatus === "complete"
-    && Array.isArray(match.players) && match.players.length
-    && Array.isArray(match.ctPlayers) && match.ctPlayers.length
-    && Array.isArray(match.tPlayers) && match.tPlayers.length;
+  const detailComplete = matchHasCompleteDetails(match);
   return `
     <article class="panel match-card ${outcome.className}">
       <div class="panel-body">
@@ -871,8 +902,7 @@ function renderMatchDetail(matchId) {
       </tr>
     `;
   }).join("") || `<tr><td colspan="8" class="empty">该范围的数据尚未完善，请点击“再同步”。</td></tr>`;
-  const detailComplete = match.detailStatus === "complete"
-    && (match.players || []).length && (match.ctPlayers || []).length && (match.tPlayers || []).length;
+  const detailComplete = matchHasCompleteDetails(match);
   return `
     <div class="modal-backdrop" data-action="close-match-detail">
       <div class="match-detail-modal" role="dialog" aria-modal="true">
@@ -2068,11 +2098,7 @@ document.addEventListener("click", async (event) => {
   if (action === "sync-all-matches") await syncAllMatches();
   if (action === "resync-match") await resyncMatch(button.dataset.id);
   if (action === "delete-selected-matches") await deleteSelectedMatches();
-  if (action === "open-match-detail") {
-    selectedMatchId = button.dataset.id;
-    selectedMatchScope = "full";
-    render();
-  }
+  if (action === "open-match-detail") await openMatchDetail(button.dataset.id);
   if (action === "match-detail-scope") {
     selectedMatchScope = button.dataset.scope || "full";
     render();
@@ -2464,6 +2490,26 @@ async function sync5e(identityCode) {
   render();
 }
 
+async function openMatchDetail(matchKey) {
+  selectedMatchId = matchKey;
+  selectedMatchScope = "full";
+  render();
+  const match = (data.matchRecords || []).find((item) => item.id === matchKey || item.matchId === matchKey);
+  const sideDataLoaded = (match?.ctPlayers || []).length && (match?.tPlayers || []).length;
+  if (!match?.hasSideDetails || sideDataLoaded) return;
+
+  syncStatus = `正在读取 ${match.mapName || match.map || match.matchId} 的半场详情...`;
+  render();
+  try {
+    const body = await api(`/api/match-detail?matchId=${encodeURIComponent(match.matchId)}`);
+    Object.assign(match, body.detail || {});
+    syncStatus = "";
+  } catch (error) {
+    syncStatus = `详情读取失败：${error.message}`;
+  }
+  render();
+}
+
 async function syncAllMatches() {
   startBusyTask("正在建立全量对局目录", SYNC_BUSY_LINES);
   syncStatus = "正在遍历指定角色成员的全部 5E 历史战绩，只记录场次信息...";
@@ -2505,6 +2551,7 @@ async function syncAllMatches() {
       totals.scanned += Number(body.scannedMatches || 0);
       totals.created += Number(body.created || 0);
       totals.merged += Number(body.merged || 0);
+      mergeMatchUpdates(body.matches || []);
       for (const failure of body.memberFailures || []) {
         totals.memberFailures.add(failure.memberCode || failure.memberName || `${body.memberIndex ?? "member"}`);
       }
@@ -2516,11 +2563,10 @@ async function syncAllMatches() {
       }
     }
 
-    const stateBody = await api("/api/state");
-    data = normalizeData(stateBody.state);
+    data = normalizeData(data);
     syncStatus = "";
     stopBusyTask(false);
-    const pending = (data.matchRecords || []).filter((match) => match.detailStatus !== "complete" || !(match.ctPlayers || []).length || !(match.tPlayers || []).length).length;
+    const pending = (data.matchRecords || []).filter((match) => !matchHasCompleteDetails(match)).length;
     const failureText = totals.memberFailures.size ? `；${totals.memberFailures.size} 位成员主页暂时无法读取` : "";
     alert(`对局目录同步完成：扫描 ${totals.scanned} 条成员战绩，新增 ${totals.created} 场，合并重复记录 ${totals.merged} 条；当前待完善 ${pending} 场${failureText}。`);
   } catch (error) {
@@ -2547,8 +2593,10 @@ async function resyncMatch(matchId) {
       method: "POST",
       body: JSON.stringify({ matchId }),
     });
-    const stateBody = await api("/api/state");
-    data = normalizeData(stateBody.state);
+    mergeMatchUpdates([body.match]);
+    const updatedMatch = (data.matchRecords || []).find((item) => item.matchId === body.matchId || item.id === body.match?.id);
+    replaceLocalPersonalRecords(updatedMatch, body.records || []);
+    data = normalizeData(data);
     selectedMatchScope = "full";
     syncStatus = "";
     stopBusyTask(false);
