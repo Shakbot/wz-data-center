@@ -2,7 +2,7 @@ const STORE_KEY = "og-esports-club-v2";
 const SESSION_KEY = "og-esports-session-v2";
 const TOKEN_KEY = "og-esports-token-v2";
 const PREF_KEY = "og-esports-preferences-v2";
-const APP_VERSION = "8.2";
+const APP_VERSION = "8.3 alpha";
 
 const IMPORTED_RECORDS = Array.isArray(window.IMPORTED_TRAINING_RECORDS)
   ? window.IMPORTED_TRAINING_RECORDS
@@ -180,7 +180,6 @@ let sidebarOpen = false;
 let booting = true;
 let syncStatus = "";
 let selectedMatchId = "";
-let selectedMatchScope = "full";
 let selectedMatchIds = new Set();
 let selectedRecordIds = new Set();
 let savingData = false;
@@ -572,7 +571,7 @@ function render() {
               <span class="chip">${t("name")} ${escapeHtml(user.name)}</span>
               <span class="chip">${t("role")} ${escapeHtml(user.role)}</span>
               <span class="chip">${t("code")} ${escapeHtml(user.identityCode)}</span>
-              <span class="chip version-chip">v${APP_VERSION}</span>
+              <span class="chip">v${APP_VERSION}</span>
               ${isAdmin(user) ? `<span class="chip"><b>${t("admin")}</b></span>` : ""}
             </div>
           </div>
@@ -702,12 +701,12 @@ function noAccess() {
 
 function renderMatches() {
   const selectedMember = tabs.matchMember ? userByCode(tabs.matchMember) : null;
-  const admin = isAdmin();
   const matches = [...(data.matchRecords || [])]
     .filter((match) => !tabs.matchMember || (match.recognizedMemberCodes || []).includes(tabs.matchMember))
     .sort((a, b) => {
     return `${b.date}-${b.endTime || ""}`.localeCompare(`${a.date}-${a.endTime || ""}`);
   });
+  const admin = isAdmin();
   const visibleMatchIds = matches.map((match) => match.id || match.matchId).filter(Boolean);
   const selectedVisibleCount = visibleMatchIds.filter((id) => selectedMatchIds.has(id)).length;
   const allVisibleSelected = visibleMatchIds.length > 0 && selectedVisibleCount === visibleMatchIds.length;
@@ -729,16 +728,6 @@ function renderMatches() {
             </div>
             <button class="primary" data-action="sync-all-matches">一键同步对局</button>
           </div>
-          ${admin ? `
-            <div class="match-bulk-row">
-              <label class="match-select-all">
-                <input type="checkbox" data-action="toggle-match-select-all" ${allVisibleSelected ? "checked" : ""} ${visibleMatchIds.length ? "" : "disabled"} />
-                <span>选择当前列表</span>
-              </label>
-              <button class="danger" data-action="delete-selected-matches" ${selectedMatchIds.size ? "" : "disabled"}>批量删除已选对局</button>
-              <span class="chip">已选 ${selectedMatchIds.size} 场</span>
-            </div>
-          ` : ""}
           <div class="match-filter-row">
             <div class="field">
               <label>按成员筛选</label>
@@ -749,6 +738,16 @@ function renderMatches() {
             </div>
             <span class="chip">${selectedMember ? `${escapeHtml(selectedMember.gameId)} · ${matches.length} 场` : `全部 · ${matches.length} 场`}</span>
           </div>
+          ${admin ? `
+            <div class="match-bulk-row">
+              <label class="match-select-all">
+                <input type="checkbox" data-action="toggle-match-select-all" ${allVisibleSelected ? "checked" : ""} ${visibleMatchIds.length ? "" : "disabled"} />
+                <span>选择当前列表</span>
+              </label>
+              <button class="danger" data-action="delete-selected-matches" ${selectedMatchIds.size ? "" : "disabled"}>删除已选对局</button>
+              <span class="chip">已选 ${selectedMatchIds.size} 场</span>
+            </div>
+          ` : ""}
         </div>
       </div>
       <div class="match-grid">${rows}</div>
@@ -760,13 +759,12 @@ function renderMatchCard(match) {
   const members = match.recognizedMemberCodes || [];
   const season = data.seasons.find((item) => item.id === match.seasonId);
   const outcome = matchOutcome(match);
-  const admin = isAdmin();
   const matchKey = match.id || match.matchId;
+  const admin = isAdmin();
   return `
     <article class="panel match-card ${outcome.className}">
       <div class="panel-body">
         <div class="match-info">
-          ${admin ? `<label class="match-select-control"><input type="checkbox" data-action="toggle-match-select" data-id="${escapeHtml(matchKey)}" ${selectedMatchIds.has(matchKey) ? "checked" : ""} /><span>选择</span></label>` : ""}
           <div class="match-card-head">
             <strong class="match-map-name">${escapeHtml(match.mapName || match.map || "Unknown Map")}</strong>
             <div class="date-line">${escapeHtml(match.date || "")} · ${escapeHtml(match.matchName || "5E 对局")} · ${season ? escapeHtml(season.shortName) : "未归属赛季"}</div>
@@ -781,8 +779,13 @@ function renderMatchCard(match) {
             <span class="chip">${members.length} 名成员</span>
             ${match.isTrainingCandidate ? `<span class="mini-badge">赛训候选</span>` : ""}
             ${match.isTrainingConfirmed ? `<span class="mini-badge">已确认赛训</span>` : ""}
+            ${admin && matchKey ? `
+              <label class="match-select-control">
+                <input type="checkbox" data-action="toggle-match-select" data-id="${escapeHtml(matchKey)}" ${selectedMatchIds.has(matchKey) ? "checked" : ""} />
+                <span>选择</span>
+              </label>
+            ` : ""}
             <button class="ghost" data-action="open-match-detail" data-id="${escapeHtml(match.id || match.matchId)}">查看详情</button>
-            ${admin ? `<button class="danger" data-action="delete-synced-match" data-id="${escapeHtml(match.id || match.matchId)}">删除对局</button>` : ""}
           </div>
         </div>
         <div class="match-scoreboard">
@@ -834,10 +837,8 @@ function matchOutcome(match) {
 function renderMatchDetail(matchId) {
   const match = (data.matchRecords || []).find((item) => item.id === matchId || item.matchId === matchId);
   if (!match) return "";
-  const scope = matchDetailScope(match);
-  const players = matchDetailPlayers(matchPlayersForScope(match, scope));
+  const players = matchDetailPlayers(match.players || []);
   const rwsRatings = matchRwsRatings(players);
-  const scopeTabs = renderMatchScopeTabs(match, scope);
   const rows = players.map((player) => {
     const member = player.memberCode ? userByCode(player.memberCode) : null;
     const rating = rwsRatings.get(player);
@@ -863,63 +864,18 @@ function renderMatchDetail(matchId) {
         <div class="panel-head">
           <div>
             <h3>${escapeHtml(match.mapName || match.map || "5E 对局")} · ${escapeHtml(match.scoreA ?? "-")} : ${escapeHtml(match.scoreB ?? "-")}</h3>
-            <div class="date-line">${escapeHtml(match.date || "")} · ${escapeHtml(match.matchName || "")} · Match ${escapeHtml(match.matchId)} · ${escapeHtml(matchScopeLabel(scope))}</div>
+            <div class="date-line">${escapeHtml(match.date || "")} · ${escapeHtml(match.matchName || "")} · Match ${escapeHtml(match.matchId)}</div>
           </div>
           <button class="icon-button" data-action="close-match-detail" aria-label="Close">×</button>
         </div>
-        <div class="match-detail-body">
-          <div class="table-wrap match-detail-table">
-            <table>
-              <thead><tr><th>玩家</th><th>阵营</th><th>杀/助/死</th><th>ADR</th><th>KAST</th><th>RWS</th><th>Rating</th><th>评价</th></tr></thead>
-              <tbody>${rows}</tbody>
-            </table>
-          </div>
-          ${scopeTabs}
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>玩家</th><th>阵营</th><th>杀/助/死</th><th>ADR</th><th>KAST</th><th>RWS</th><th>Rating</th><th>评价</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
         </div>
       </div>
     </div>
-  `;
-}
-
-function matchDetailScope(match) {
-  const scopes = matchAvailableScopes(match);
-  return scopes.includes(selectedMatchScope) ? selectedMatchScope : "full";
-}
-
-function matchAvailableScopes(match) {
-  return ["full", "ct", "t"].filter((scope) => matchPlayersForScope(match, scope).length);
-}
-
-function matchPlayersForScope(match, scope) {
-  if (scope === "full") return match.playerViews?.full?.length ? match.playerViews.full : (match.players || []);
-  return match.playerViews?.[scope] || [];
-}
-
-function matchScopeLabel(scope) {
-  if (scope === "ct") return "CT 半场";
-  if (scope === "t") return "T 半场";
-  return "全场";
-}
-
-function renderMatchScopeTabs(match, activeScope) {
-  const scopes = [
-    ["full", "全场", "ALL"],
-    ["ct", "CT 半场", "CT"],
-    ["t", "T 半场", "T"],
-  ];
-  return `
-    <aside class="match-scope-switcher" aria-label="对局数据视图">
-      ${scopes.map(([scope, label, mark]) => {
-        const count = matchPlayersForScope(match, scope).length;
-        return `
-          <button class="${activeScope === scope ? "active" : ""}" data-action="match-detail-scope" data-scope="${scope}" ${count ? "" : "disabled"} type="button">
-            <span>${escapeHtml(mark)}</span>
-            <strong>${escapeHtml(label)}</strong>
-            <em>${count ? `${count} 人` : "暂无"}</em>
-          </button>
-        `;
-      }).join("")}
-    </aside>
   `;
 }
 
@@ -2089,21 +2045,14 @@ document.addEventListener("click", async (event) => {
     if (season) await promoteTraining(null, season);
   }
   if (action === "sync-all-matches") await syncAllMatches();
-  if (action === "delete-synced-match") await deleteSyncedMatch(button.dataset.id);
   if (action === "delete-selected-matches") await deleteSelectedMatches();
   if (action === "open-match-detail") {
     selectedMatchId = button.dataset.id;
-    selectedMatchScope = "full";
-    render();
-  }
-  if (action === "match-detail-scope") {
-    selectedMatchScope = button.dataset.scope || "full";
     render();
   }
   if (action === "close-match-detail") {
     if (button.classList.contains("modal-backdrop") && event.target !== button) return;
     selectedMatchId = "";
-    selectedMatchScope = "full";
     render();
   }
   if (action === "save-record") await saveRecord(button.dataset.id);
@@ -2151,12 +2100,14 @@ document.addEventListener("change", (event) => {
   }
   if (target.dataset.action === "toggle-match-select") {
     const id = target.dataset.id;
-    if (target.checked) selectedMatchIds.add(id);
-    else selectedMatchIds.delete(id);
+    if (id && target.checked) selectedMatchIds.add(id);
+    if (id && !target.checked) selectedMatchIds.delete(id);
     render();
   }
   if (target.dataset.action === "toggle-match-select-all") {
-    const ids = [...document.querySelectorAll("[data-action='toggle-match-select']")].map((input) => input.dataset.id).filter(Boolean);
+    const ids = [...document.querySelectorAll("[data-action='toggle-match-select']")]
+      .map((input) => input.dataset.id)
+      .filter(Boolean);
     if (target.checked) ids.forEach((id) => selectedMatchIds.add(id));
     else ids.forEach((id) => selectedMatchIds.delete(id));
     render();
@@ -2492,15 +2443,12 @@ async function syncAllMatches() {
   try {
     const body = await api("/api/sync-matches", {
       method: "POST",
-      body: JSON.stringify({ maxPages: 100 }),
+      body: JSON.stringify({ page: 1 }),
     });
     data = normalizeData(body.state);
     syncStatus = "";
     stopBusyTask(false);
-    const failureText = (body.listFailures || body.detailFailures)
-      ? `，列表失败 ${body.listFailures || 0} 项，详情失败 ${body.detailFailures || 0} 场`
-      : "";
-    alert(`对局同步完成：种子成员 ${body.seedMembers} 人，最多扫描 ${body.scannedPages || 1} 页，发现 ${body.scannedMatches} 场，新增 ${body.created} 场，更新 ${body.updated} 场；arena 访问 ${body.arenaVisited || 0} 场，WAF ${body.arenaBlocked || 0} 场，arena 直接解析 ${body.arenaParsed || 0} 场${failureText}。`);
+    alert(`对局同步完成：种子成员 ${body.seedMembers} 人，扫描 ${body.scannedMatches} 场，新增 ${body.created} 场，更新 ${body.updated} 场，回源修复历史 ${body.refreshedExisting || 0} 场。`);
   } catch (error) {
     syncStatus = error.message;
     stopBusyTask(false);
@@ -2509,42 +2457,13 @@ async function syncAllMatches() {
   render();
 }
 
-async function deleteSyncedMatch(id) {
-  const user = currentUser();
-  if (!isAdmin(user)) return alert("只有拥有全体管理权限的用户可以删除已同步对局。");
-  const match = (data.matchRecords || []).find((item) => item.id === id || item.matchId === id);
-  if (!match) return alert("没有找到要删除的对局。");
-  const label = `${match.mapName || match.map || "5E 对局"} · ${match.date || ""} · ${match.matchId || ""}`;
-  if (!confirm(`确定删除这场已同步对局吗？\n${label}\n\n该操作会同时删除这场对局生成的 5E 同步记录，并从统计中移除。`)) return;
-  syncStatus = "正在删除已同步对局...";
-  render();
-  try {
-    const body = await api("/api/delete-match", {
-      method: "POST",
-      body: JSON.stringify({ matchId: match.matchId || "", id: match.id || "" }),
-    });
-    data = normalizeData(body.state);
-    if (selectedMatchId === id || selectedMatchId === match.id || selectedMatchId === match.matchId) {
-      selectedMatchId = "";
-      selectedMatchScope = "full";
-    }
-    selectedMatchIds.delete(match.id || match.matchId);
-    syncStatus = `已删除 ${body.removedMatches || 1} 场对局，清理 ${body.removedRecords || 0} 条同步记录`;
-  } catch (error) {
-    syncStatus = error.message;
-    alert(`删除对局失败：${error.message}`);
-  }
-  render();
-}
-
 async function deleteSelectedMatches() {
   const user = currentUser();
-  if (!isAdmin(user)) return alert("只有拥有全体管理权限的用户可以批量删除已同步对局。");
-  const ids = [...selectedMatchIds].filter(Boolean);
-  if (!ids.length) return alert("请先选择要删除的对局。");
-  if (!confirm(`确定批量删除已选的 ${ids.length} 场已同步对局吗？\n\n该操作会同时删除这些对局生成的 5E 同步记录，并从统计中移除。`)) return;
-  syncStatus = "正在批量删除已同步对局...";
-  render();
+  if (!isAdmin(user)) return alert("只有拥有全体管理权限的用户可以删除已同步对局。");
+  const ids = [...selectedMatchIds];
+  if (!ids.length) return alert("请先选择要删除的已同步对局。");
+  if (!confirm(`确认删除已选择的 ${ids.length} 场已同步对局？相关 5E 自动训练记录也会一并删除。`)) return;
+  startBusyTask("正在删除已同步对局", ["清理对局记录", "同步更新训练数据", "写入云端数据"]);
   try {
     const body = await api("/api/delete-match", {
       method: "POST",
@@ -2554,15 +2473,18 @@ async function deleteSelectedMatches() {
     selectedMatchIds = new Set();
     if (selectedMatchId && !(data.matchRecords || []).some((match) => match.id === selectedMatchId || match.matchId === selectedMatchId)) {
       selectedMatchId = "";
-      selectedMatchScope = "full";
     }
-    syncStatus = `已删除 ${body.removedMatches || ids.length} 场对局，清理 ${body.removedRecords || 0} 条同步记录`;
+    syncStatus = "";
+    stopBusyTask(false);
+    alert(`已删除 ${body.removedMatches || 0} 场对局，并清理 ${body.removedRecords || 0} 条关联训练记录。`);
   } catch (error) {
     syncStatus = error.message;
-    alert(`批量删除对局失败：${error.message}`);
+    stopBusyTask(false);
+    alert(`删除已同步对局失败：${error.message}`);
   }
   render();
 }
+
 function fileToDataUrl(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();

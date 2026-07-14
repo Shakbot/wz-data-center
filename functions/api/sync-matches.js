@@ -1,90 +1,19 @@
 import { ensureSchema, isAdmin, json, readState, userFromRequest, writeState } from "./_utils.js";
 
 const FIVE_E_BASE = "https://ya-api-app.5eplay.com";
-const ARENA_BASE = "https://arena.5eplay.com/data/match";
-const SYNC_VERSION = "8.2";
 
-function isLikely5eDomain(value) {
-  return /^[a-z0-9][a-z0-9_-]{2,}$/i.test(String(value || "").trim());
-}
-
-function isBlockedPathDomain(value) {
-  return /^(app|fwap|profile|player|user|csgo|share_loding_type\d*|share_loading_type\d*|data|match_data)$/i.test(String(value || "").trim());
-}
-
-function isUsable5eDomain(value) {
-  return isLikely5eDomain(value) && !isBlockedPathDomain(value);
-}
-
-function parse5eProfile(...values) {
-  const candidates = values.flat().map((value) => String(value || "").trim()).filter(Boolean);
-  let fallback = { domain: "", uuid: "", profileUrl: "" };
-  for (const raw of candidates) {
-    const parsed = parse5eProfileValue(raw);
-    if (parsed.explicitDomain) return parsed;
-    fallback = {
-      domain: fallback.domain || parsed.domain,
-      uuid: fallback.uuid || parsed.uuid,
-      profileUrl: fallback.profileUrl || parsed.profileUrl,
-    };
-  }
-  return fallback;
-}
-
-function parse5eProfileValue(value) {
+function parse5eProfile(value) {
   const raw = String(value || "").trim();
   if (!raw) return { domain: "", uuid: "", profileUrl: "" };
-  const domainMatch = raw.match(/[?&#]domain=([^&#]+)/i);
-  const uuidMatch = raw.match(/[?&#]uuid=([^&#]+)/i);
-  if (domainMatch) {
-    return {
-      domain: decodeURIComponent(domainMatch[1]).trim(),
-      uuid: uuidMatch ? decodeURIComponent(uuidMatch[1]).trim() : "",
-      profileUrl: raw,
-      explicitDomain: true,
-    };
-  }
   try {
     const url = new URL(raw);
-    const hashParams = new URLSearchParams(String(url.hash || "").replace(/^#\??/, ""));
-    const explicitDomain = url.searchParams.get("domain") || hashParams.get("domain") || "";
-    const uuid = url.searchParams.get("uuid") || hashParams.get("uuid") || "";
-    const pathDomain = url.pathname
-      .split("/")
-      .map((part) => decodeURIComponent(part).trim())
-      .reverse()
-      .find(isUsable5eDomain);
     return {
-      domain: explicitDomain || pathDomain || "",
-      uuid,
+      domain: url.searchParams.get("domain") || "",
+      uuid: url.searchParams.get("uuid") || "",
       profileUrl: raw,
-      explicitDomain: Boolean(explicitDomain),
     };
   } catch {
-    return { domain: isUsable5eDomain(raw) ? raw : "", uuid: "", profileUrl: "", explicitDomain: isUsable5eDomain(raw) };
-  }
-}
-
-function normalizeUserAliases(state) {
-  const defaults = {
-    "06": ["OG_SilverBullet_ZJ", "OG_SliverBullet_ZJ", "OG_SilverBullet", "OG_SliverBullet"],
-  };
-  for (const user of state.users || []) {
-    user.fiveEAliases = Array.isArray(user.fiveEAliases)
-      ? user.fiveEAliases
-      : String(user.fiveEAliases || "").split(/[,，\n]/).map((item) => item.trim()).filter(Boolean);
-    const aliases = new Set(user.fiveEAliases);
-    for (const alias of defaults[user.identityCode] || []) aliases.add(alias);
-    user.fiveEAliases = [...aliases];
-  }
-}
-
-function normalizeFiveEProfiles(state) {
-  for (const user of state.users || []) {
-    const profile = parse5eProfile(user.fiveEProfileUrl, user.fiveEDomain);
-    if (profile.domain) user.fiveEDomain = profile.domain;
-    if (profile.uuid && !user.fiveEUuid) user.fiveEUuid = profile.uuid;
-    if (profile.profileUrl && !user.fiveEProfileUrl) user.fiveEProfileUrl = profile.profileUrl;
+    return { domain: raw, uuid: "", profileUrl: "" };
   }
 }
 
@@ -147,14 +76,64 @@ function nameVariants(value) {
 
 function findSeasonForDate(state, date) {
   const stamp = new Date(`${date}T00:00:00`).getTime();
-  return (state.seasons || []).find((season) => {
+  return state.seasons.find((season) => {
     return new Date(`${season.start}T00:00:00`).getTime() <= stamp && stamp <= new Date(`${season.end}T00:00:00`).getTime();
-  }) || null;
+  });
 }
 
 function isTrainingEligible(state, code) {
-  const user = (state.users || []).find((item) => item.identityCode === code);
+  const user = state.users.find((item) => item.identityCode === code);
   return !!user && user.role !== "观察员";
+}
+
+function normalizeUserAliases(state) {
+  const defaults = {
+    "06": ["OG_SilverBullet_ZJ", "OG_SliverBullet_ZJ", "OG_SilverBullet", "OG_SliverBullet"],
+  };
+  for (const user of state.users || []) {
+    user.fiveEAliases = Array.isArray(user.fiveEAliases)
+      ? user.fiveEAliases
+      : String(user.fiveEAliases || "").split(/[,，\n]/).map((item) => item.trim()).filter(Boolean);
+    const aliases = new Set(user.fiveEAliases);
+    for (const alias of defaults[user.identityCode] || []) aliases.add(alias);
+    user.fiveEAliases = [...aliases];
+  }
+}
+
+async function fetch5eJson(path) {
+  const response = await fetch(`${FIVE_E_BASE}${path}`, {
+    headers: {
+      "accept": "application/json,text/plain,*/*",
+      "user-agent": "Mozilla/5.0",
+      "referer": "https://csgo.5eplay.com/fwap/",
+    },
+  });
+  const body = await response.json().catch(() => null);
+  if (!response.ok || !body?.success) throw new Error(body?.message || `5E 接口请求失败：${response.status}`);
+  return body.data;
+}
+
+function rowsWithTeam(rows, fallbackTeam = "") {
+  return (Array.isArray(rows) ? rows : []).map((row) => ({ ...row, _fallbackTeam: fallbackTeam }));
+}
+
+function readScoreboardRows(detail) {
+  const fullRows = rowsWithTeam(detail.user_match_data);
+  if (fullRows.length) return fullRows;
+
+  const groupedRows = [
+    ...rowsWithTeam(detail.group1_user_match_data, "1"),
+    ...rowsWithTeam(detail.group2_user_match_data, "2"),
+  ];
+  if (groupedRows.length) return groupedRows;
+
+  const sideRows = [
+    ...rowsWithTeam(detail.ct_user_match_data, "1"),
+    ...rowsWithTeam(detail.t_user_match_data, "2"),
+  ];
+  if (sideRows.length) return sideRows;
+
+  return rowsWithTeam(detail.players);
 }
 
 function compactKey(value) {
@@ -182,16 +161,17 @@ function buildMemberIndexes(users) {
   const names = [];
   const addName = (name, user) => {
     for (const normalized of nameVariants(name)) {
+      if (!normalized) continue;
       byName.set(normalized, user);
       names.push({ normalized, user });
     }
   };
-  for (const user of users || []) {
-    const profile = parse5eProfile(user.fiveEProfileUrl, user.fiveEDomain);
+  for (const user of users) {
+    const profile = parse5eProfile(user.fiveEProfileUrl || user.fiveEDomain);
     if (profile.domain) byDomain.set(profile.domain, user);
     if (profile.uuid) byUuid.set(profile.uuid, user);
-    if (user.fiveEDomain) byDomain.set(String(user.fiveEDomain), user);
     if (user.fiveEUuid) byUuid.set(String(user.fiveEUuid), user);
+    if (user.fiveEDomain) byDomain.set(String(user.fiveEDomain), user);
     addName(user.gameId, user);
     addName(user.name, user);
     for (const alias of user.fiveEAliases || []) addName(alias, user);
@@ -203,11 +183,24 @@ function recognizeMember(row, indexes) {
   const domain = String(readField(row, ["domain", "user.domain", "user_info.domain", "player.domain", "player_info.domain"]) || "").trim();
   const uuid = String(readField(row, ["uuid", "user.uuid", "user_info.uuid", "player.uuid", "player_info.uuid"]) || "").trim();
   const nickname = String(readField(row, [
-    "username", "user_name", "player_name", "name", "nickname", "nick_name",
-    "user.username", "user.name", "user.nickname",
-    "user_info.username", "user_info.name", "user_info.nickname",
-    "player.username", "player.name", "player.nickname",
-    "player_info.username", "player_info.name", "player_info.nickname",
+    "username",
+    "user_name",
+    "player_name",
+    "name",
+    "nickname",
+    "nick_name",
+    "user.username",
+    "user.name",
+    "user.nickname",
+    "user_info.username",
+    "user_info.name",
+    "user_info.nickname",
+    "player.username",
+    "player.name",
+    "player.nickname",
+    "player_info.username",
+    "player_info.name",
+    "player_info.nickname",
   ]) || "").trim();
   if (domain && indexes.byDomain.has(domain)) return indexes.byDomain.get(domain);
   if (uuid && indexes.byUuid.has(uuid)) return indexes.byUuid.get(uuid);
@@ -231,9 +224,18 @@ function sideOf(row, fallback = "") {
 
 function extractSwingScore(row) {
   const candidates = [
-    row.swing_score, row.swingScore, row.swing_score_value, row.swingScoreValue,
-    row.swing, row.swing_value, row.swingValue, row.ss, row.five_swing_score,
-    row.score_value, row.score, row.change_elo,
+    row.swing_score,
+    row.swingScore,
+    row.swing_score_value,
+    row.swingScoreValue,
+    row.swing,
+    row.swing_value,
+    row.swingValue,
+    row.ss,
+    row.five_swing_score,
+    row.score_value,
+    row.score,
+    row.change_elo,
   ];
   for (const value of candidates) {
     const score = Number(value);
@@ -251,11 +253,24 @@ function buildPlayer(row, indexes) {
   const headshots = firstNumber(row, ["headshot", "headshots", "headshot_num", "hs", "hs_num"]);
   const headshotRate = firstNumber(row, ["per_headshot", "headshotRate", "headshot_rate", "hsRate", "hs_rate"], NaN);
   const nickname = String(readField(row, [
-    "username", "user_name", "player_name", "name", "nickname", "nick_name",
-    "user.username", "user.name", "user.nickname",
-    "user_info.username", "user_info.name", "user_info.nickname",
-    "player.username", "player.name", "player.nickname",
-    "player_info.username", "player_info.name", "player_info.nickname",
+    "username",
+    "user_name",
+    "player_name",
+    "name",
+    "nickname",
+    "nick_name",
+    "user.username",
+    "user.name",
+    "user.nickname",
+    "user_info.username",
+    "user_info.name",
+    "user_info.nickname",
+    "player.username",
+    "player.name",
+    "player.nickname",
+    "player_info.username",
+    "player_info.name",
+    "player_info.nickname",
     "domain",
   ]) || "Unknown");
   return {
@@ -264,7 +279,7 @@ function buildPlayer(row, indexes) {
     uuid: String(readField(row, ["uuid", "user.uuid", "user_info.uuid", "player.uuid", "player_info.uuid"]) || ""),
     memberCode: member?.identityCode || "",
     isClubMember: Boolean(member),
-    isOgCandidate: normalizeName(nickname).startsWith("og"),
+    isOgCandidate: normalizeName(nickname).startsWith("og_"),
     team: sideOf(row),
     kill: kills,
     death: deaths,
@@ -272,7 +287,7 @@ function buildPlayer(row, indexes) {
     adr: firstNumber(row, ["adr", "ADR", "avg_damage", "average_damage", "damage_per_round", "per_damage"]),
     kast: firstNumber(row, ["kast", "KAST", "per_kast", "kast_rate"]),
     rws: firstNumber(row, ["rws", "RWS", "rws_score"]),
-    rating: firstNumber(row, ["rating", "Rating", "rating_score", "score_rating", "rating_plus"]),
+    rating: firstNumber(row, ["rating", "Rating", "rating_score", "score_rating"]),
     swingScore: extractSwingScore(row),
     headshotRate: Number.isFinite(headshotRate) ? headshotRate : kills ? (headshots / kills) * 100 : 0,
     rank: String(readField(row, ["level_name", "rank", "rank_name"]) || ""),
@@ -298,7 +313,11 @@ function dedupePlayers(players) {
   for (const player of players) {
     const key = player.domain || player.uuid || `${normalizeName(player.nickname)}-${player.team || ""}`;
     const current = chosen.get(key);
-    if (!current || playerCompleteness(player) > playerCompleteness(current) || (playerCompleteness(player) === playerCompleteness(current) && Number(player.rating || 0) > Number(current.rating || 0))) {
+    if (
+      !current
+      || playerCompleteness(player) > playerCompleteness(current)
+      || (playerCompleteness(player) === playerCompleteness(current) && Number(player.rating || 0) > Number(current.rating || 0))
+    ) {
       chosen.set(key, player);
     }
   }
@@ -309,239 +328,23 @@ function dedupePlayers(players) {
   return [...teamA, ...teamB, ...other].slice(0, 10);
 }
 
-function rowsWithTeam(rows, fallbackTeam = "") {
-  return (Array.isArray(rows) ? rows : []).map((row) => ({ ...row, _fallbackTeam: sideOf(row, fallbackTeam) || fallbackTeam }));
-}
-
-function rowIdentity(row) {
-  return String(readField(row, ["domain", "uuid", "username", "user_name", "player_name", "nickname", "name"]) || "").toLowerCase();
-}
-
-function attachTeams(rows, fullRows) {
-  const fullByIdentity = new Map();
-  for (const row of fullRows) fullByIdentity.set(rowIdentity(row), sideOf(row));
-  return rows.map((row) => {
-    const fallback = sideOf(row) || fullByIdentity.get(rowIdentity(row)) || "";
-    return { ...row, _fallbackTeam: fallback };
-  });
-}
-
-function readFullRows(detail) {
-  const direct = rowsWithTeam(detail.user_match_data);
-  if (direct.length) return direct;
-  const grouped = [
-    ...rowsWithTeam(detail.group1_user_match_data, "1"),
-    ...rowsWithTeam(detail.group2_user_match_data, "2"),
-  ];
-  if (grouped.length) return grouped;
-  return rowsWithTeam(detail.players || detail.player_list || detail.scoreboard);
-}
-
-function readPlayerViewRows(detail) {
-  const full = readFullRows(detail);
-  return {
-    full,
-    ct: attachTeams(rowsWithTeam(detail.ct_user_match_data || detail.ct_player_data || detail.ct_players), full),
-    t: attachTeams(rowsWithTeam(detail.t_user_match_data || detail.t_player_data || detail.t_players), full),
-  };
-}
-
-function buildPlayerViews(detail, indexes) {
-  const rows = readPlayerViewRows(detail);
-  return Object.fromEntries(Object.entries(rows).map(([scope, scopeRows]) => {
-    return [scope, dedupePlayers(scopeRows.map((row) => buildPlayer(row, indexes)))];
-  }));
-}
-
-function normalizeDetailObject(value, seen = new Set()) {
-  if (!value || typeof value !== "object" || seen.has(value)) return null;
-  seen.add(value);
-  if (
-    Array.isArray(value.user_match_data)
-    || Array.isArray(value.ct_user_match_data)
-    || Array.isArray(value.t_user_match_data)
-    || Array.isArray(value.group1_user_match_data)
-    || Array.isArray(value.group2_user_match_data)
-  ) {
-    return value;
-  }
-  for (const child of Object.values(value)) {
-    const found = normalizeDetailObject(child, seen);
-    if (found) return found;
-  }
-  return null;
-}
-
-function decodeHtml(value) {
-  return String(value || "")
-    .replace(/&quot;/g, '"')
-    .replace(/&#34;/g, '"')
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">");
-}
-
-function parseArenaDetailHtml(html) {
-  if (!html || /aliyun_waf|acw_sc__v2|renderData|aliyunwaf/i.test(html)) return null;
-  const candidates = [];
-  for (const match of html.matchAll(/<script[^>]*type=["']application\/json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
-    candidates.push(decodeHtml(match[1]));
-  }
-  for (const match of html.matchAll(/(?:window\.__INITIAL_STATE__|window\.__NUXT__|__NEXT_DATA__)\s*=\s*({[\s\S]*?})\s*;?\s*<\/script>/gi)) {
-    candidates.push(decodeHtml(match[1]));
-  }
-  if (html.includes("user_match_data")) {
-    const start = Math.max(0, html.indexOf("user_match_data") - 20000);
-    const end = Math.min(html.length, html.indexOf("user_match_data") + 80000);
-    const slice = decodeHtml(html.slice(start, end));
-    const objectStart = slice.indexOf("{");
-    const objectEnd = slice.lastIndexOf("}");
-    if (objectStart >= 0 && objectEnd > objectStart) candidates.push(slice.slice(objectStart, objectEnd + 1));
-  }
-  for (const candidate of candidates) {
-    try {
-      const parsed = JSON.parse(candidate.trim());
-      const detail = normalizeDetailObject(parsed);
-      if (detail) return detail;
-    } catch {
-      // Ignore non-JSON scripts; arena often serves framework chunks here.
-    }
-  }
-  return null;
-}
-
-async function fetchText(url) {
-  const response = await fetch(url, {
-    headers: {
-      "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      "user-agent": "Mozilla/5.0",
-      "referer": "https://arena.5eplay.com/",
-    },
-  });
-  return response.text();
-}
-
-async function fetch5eJson(path) {
-  const response = await fetch(`${FIVE_E_BASE}${path}`, {
-    headers: {
-      "accept": "application/json,text/plain,*/*",
-      "user-agent": "Mozilla/5.0",
-      "referer": "https://csgo.5eplay.com/fwap/",
-    },
-  });
-  const body = await response.json().catch(() => null);
-  if (!response.ok || !body?.success) throw new Error(body?.message || `5E API request failed: ${response.status}`);
-  return body.data;
-}
-
-async function discoverHistoryForProfile(seed, maxPages, failures) {
-  const found = [];
-  const seen = new Set();
-  let emptyPages = 0;
-  for (let page = 1; page <= maxPages; page += 1) {
-    const listData = await fetch5eJson(`/v0/mars/api/csgo/match_data/match_list?domain=${encodeURIComponent(seed.profile.domain)}&match_type=&time=&date_time=0&map_name=&page=${page}`).catch((error) => {
-      failures.push({ domain: seed.profile.domain, page, error: error.message || String(error) });
-      return null;
-    });
-    const matches = Array.isArray(listData?.match_list) ? listData.match_list : [];
-    if (!matches.length) {
-      emptyPages += 1;
-      if (emptyPages >= 2) break;
-      continue;
-    }
-    emptyPages = 0;
-    for (const item of matches) {
-      if (!item?.match_id || seen.has(item.match_id)) continue;
-      seen.add(item.match_id);
-      found.push(item);
-    }
-    if (matches.length < 20) break;
-  }
-  return found;
-}
-
-function addMatchSeed(matchSeeds, item, domain, memberCode) {
-  const matchId = String(item?.match_id || "").trim();
-  if (!matchId || !domain) return;
-  const current = matchSeeds.get(matchId);
-  if (current) {
-    if (!current.domains.includes(domain)) current.domains.push(domain);
-    if (memberCode && !current.memberCodes.includes(memberCode)) current.memberCodes.push(memberCode);
-    current.items.push(item);
-    return;
-  }
-  matchSeeds.set(matchId, {
-    matchId,
-    arenaUrl: `${ARENA_BASE}/${encodeURIComponent(matchId)}`,
-    item,
-    items: [item],
-    domains: [domain],
-    memberCodes: memberCode ? [memberCode] : [],
-  });
-}
-
-async function fetchMatchDetail(seed, failures) {
-  let arenaVisited = false;
-  let arenaBlocked = false;
-  let arenaParsed = false;
-  try {
-    arenaVisited = true;
-    const html = await fetchText(seed.arenaUrl);
-    arenaBlocked = /aliyun_waf|acw_sc__v2|renderData|aliyunwaf/i.test(html);
-    const arenaDetail = parseArenaDetailHtml(html);
-    if (arenaDetail) {
-      arenaParsed = true;
-      return { detail: arenaDetail, source: "arena-html", arenaVisited, arenaBlocked, arenaParsed, domain: seed.domains[0] || "" };
-    }
-  } catch (error) {
-    failures.push({ matchId: seed.matchId, source: "arena", error: error.message || String(error) });
-  }
-  const errors = [];
-  for (const domain of seed.domains) {
-    try {
-      const detail = await fetch5eJson(`/v0/mars/api/csgo/data/player_match_info/${encodeURIComponent(seed.matchId)}/${encodeURIComponent(domain)}`);
-      if (readFullRows(detail).length) {
-        return { detail, source: "5e-json", arenaVisited, arenaBlocked, arenaParsed, domain };
-      }
-      errors.push(`${domain}: empty detail`);
-    } catch (error) {
-      errors.push(`${domain}: ${error.message || String(error)}`);
-    }
-  }
-  failures.push({ matchId: seed.matchId, source: "5e-json", error: errors.join("; ") || "no available domain" });
-  return { detail: null, source: "", arenaVisited, arenaBlocked, arenaParsed, domain: "" };
-}
-
-function bestListItem(seed, detail) {
-  const main = detail?.main || detail?.match || {};
-  return {
-    ...seed.item,
-    ...main,
-    match_id: seed.matchId,
-  };
-}
-
-function buildMatchRecord(state, seed, detail, indexes, detailMeta) {
+function buildMatchRecord(state, listItem, detail, indexes) {
   const main = detail.main || detail.match || {};
-  const item = bestListItem(seed, detail);
-  const date = dateFromUnix(main.end_time || main.start_time || item.end_time || item.start_time);
+  const date = dateFromUnix(main.end_time || main.start_time || listItem.end_time || listItem.start_time);
   const season = findSeasonForDate(state, date);
-  const playerViews = buildPlayerViews(detail, indexes);
-  const players = playerViews.full || [];
+  const players = dedupePlayers(readScoreboardRows(detail).map((row) => buildPlayer(row, indexes)));
   const recognizedMemberCodes = [...new Set(players.filter((player) => player.memberCode).map((player) => player.memberCode))];
   const trainingMemberCodes = recognizedMemberCodes.filter((code) => isTrainingEligible(state, code));
-  const group1Score = firstNumber(main, ["group1_all_score", "group1_score", "team1_score", "score1", "a_score"], firstNumber(item, ["group1_all_score", "group1_score", "team1_score", "score1", "a_score"]));
-  const group2Score = firstNumber(main, ["group2_all_score", "group2_score", "team2_score", "score2", "b_score"], firstNumber(item, ["group2_all_score", "group2_score", "team2_score", "score2", "b_score"]));
+  const group1Score = firstNumber(main, ["group1_all_score", "group1_score", "team1_score", "score1", "a_score"], firstNumber(listItem, ["group1_all_score", "group1_score", "team1_score", "score1", "a_score"]));
+  const group2Score = firstNumber(main, ["group2_all_score", "group2_score", "team2_score", "score2", "b_score"], firstNumber(listItem, ["group2_all_score", "group2_score", "team2_score", "score2", "b_score"]));
   const record = {
-    matchId: seed.matchId,
-    arenaUrl: seed.arenaUrl,
+    matchId: listItem.match_id,
     date,
-    endTime: String(main.end_time || item.end_time || ""),
-    startTime: String(main.start_time || item.start_time || ""),
-    map: String(main.map || item.map || ""),
-    mapName: String(main.map_name || main.map_desc || item.map_name || item.map_desc || ""),
-    matchName: String(main.match_name || item.match_name || ""),
-    matchType: String(main.match_type || item.match_type || ""),
+    endTime: String(main.end_time || listItem.end_time || ""),
+    map: String(main.map || listItem.map || ""),
+    mapName: String(main.map_name || main.map_desc || listItem.map_name || listItem.map_desc || ""),
+    matchName: String(main.match_name || listItem.match_name || ""),
+    matchType: String(main.match_type || listItem.match_type || ""),
     scoreA: group2Score,
     scoreB: group1Score,
     seasonId: season ? season.id : "",
@@ -549,12 +352,6 @@ function buildMatchRecord(state, seed, detail, indexes, detailMeta) {
     isTrainingCandidate: trainingMemberCodes.length >= 3,
     isTrainingConfirmed: false,
     players,
-    playerViews: { ...playerViews, full: players },
-    syncSource: detailMeta.source,
-    arenaVisited: detailMeta.arenaVisited,
-    arenaBlocked: detailMeta.arenaBlocked,
-    arenaParsed: detailMeta.arenaParsed,
-    detailDomain: detailMeta.domain,
     syncedAt: new Date().toISOString(),
   };
   record.fingerprint = matchFingerprint(record);
@@ -562,102 +359,35 @@ function buildMatchRecord(state, seed, detail, indexes, detailMeta) {
   return record;
 }
 
-function normalizeStoredPlayer(player, indexes) {
-  if (player.memberCode) return player;
-  const member = recognizeMember({
-    domain: player.domain,
-    uuid: player.uuid,
-    username: player.nickname || player.name,
-    player_name: player.nickname || player.name,
-  }, indexes);
-  return member ? { ...player, memberCode: member.identityCode, isClubMember: true } : player;
-}
-
-function normalizeStoredPlayers(players, indexes) {
-  return dedupePlayers((Array.isArray(players) ? players : []).map((player) => normalizeStoredPlayer(player, indexes)));
-}
-
-function matchRecordCompleteness(record) {
-  const viewCount = Object.values(record.playerViews || {}).reduce((total, players) => total + (Array.isArray(players) ? players.length : 0), 0);
-  return ((record.players || []).length * 10) + Math.min(viewCount, 30);
-}
-
-function normalizeExistingMatches(state, indexes) {
-  const byMatch = new Map();
-  for (const record of state.matchRecords || []) {
-    record.players = normalizeStoredPlayers(record.players, indexes);
-    if (record.playerViews && typeof record.playerViews === "object") {
-      record.playerViews = Object.fromEntries(Object.entries(record.playerViews).map(([scope, players]) => [scope, normalizeStoredPlayers(players, indexes)]));
-      if (!record.playerViews.full?.length && record.players.length) record.playerViews.full = record.players;
-    } else if (record.players.length) {
-      record.playerViews = { full: record.players };
-    }
-    record.recognizedMemberCodes = [...new Set(record.players.filter((player) => player.memberCode).map((player) => player.memberCode))];
-    record.isTrainingCandidate = record.recognizedMemberCodes.filter((code) => isTrainingEligible(state, code)).length >= 3;
-    record.fingerprint = record.fingerprint || matchFingerprint(record);
-    record.id = record.id || `match-${record.fingerprint}`;
-    const key = record.matchId || record.fingerprint;
-    const current = byMatch.get(key);
-    if (!current || matchRecordCompleteness(record) > matchRecordCompleteness(current)) byMatch.set(key, record);
-  }
-  state.matchRecords = [...byMatch.values()];
-}
-
-function recordMatchKeys(record) {
-  return [record.fiveE?.matchRecordId, record.fiveE?.fingerprint, record.fiveE?.matchId, record.trainingMatchId].filter(Boolean);
-}
-
-function normalizeExistingPersonalRecords(state) {
-  const byMatchAndUser = new Map();
-  const passthrough = [];
-  const mergeTrainingFlags = (target, source) => {
-    if (source.trainingIncluded) target.trainingIncluded = true;
-    if (source.trainingMatchId && !target.trainingMatchId) target.trainingMatchId = source.trainingMatchId;
-    if (source.trainingPromotedAt && !target.trainingPromotedAt) target.trainingPromotedAt = source.trainingPromotedAt;
+function matchSeedFromRecord(matchRecord, seeds) {
+  const memberSeed = seeds.find((seed) => (matchRecord.recognizedMemberCodes || []).includes(seed.user.identityCode));
+  const playerDomain = (matchRecord.players || []).find((player) => player.domain)?.domain || "";
+  const domain = memberSeed?.profile?.domain || playerDomain || seeds[0]?.profile?.domain || "";
+  if (!matchRecord.matchId || !domain) return null;
+  return {
+    domain,
+    item: {
+      match_id: matchRecord.matchId,
+      end_time: matchRecord.endTime || "",
+      start_time: matchRecord.startTime || "",
+      map: matchRecord.map || "",
+      map_name: matchRecord.mapName || "",
+      map_desc: matchRecord.mapName || "",
+      match_name: matchRecord.matchName || "",
+      match_type: matchRecord.matchType || "",
+    },
+    existing: true,
   };
-  for (const record of state.records || []) {
-    const matchKey = recordMatchKeys(record)[0] || "";
-    if (!matchKey || !record.userIdentityCode) {
-      passthrough.push(record);
-      continue;
-    }
-    const key = `${matchKey}:${record.userIdentityCode}`;
-    const current = byMatchAndUser.get(key);
-    if (!current) {
-      byMatchAndUser.set(key, record);
-      continue;
-    }
-    const next = String(record.updatedAt || record.createdAt || "") > String(current.updatedAt || current.createdAt || "") ? record : current;
-    mergeTrainingFlags(next, current);
-    mergeTrainingFlags(next, record);
-    byMatchAndUser.set(key, next);
-  }
-  state.records = [...passthrough, ...byMatchAndUser.values()];
-}
-
-function normalizeTrainingIncludedRecords(state) {
-  const byMatchAndUser = new Map();
-  for (const record of state.records || []) {
-    if (!record.trainingIncluded || !record.userIdentityCode) continue;
-    for (const matchKey of recordMatchKeys(record)) byMatchAndUser.set(`${matchKey}:${record.userIdentityCode}`, record);
-  }
-  for (const record of state.records || []) {
-    if (!record.userIdentityCode) continue;
-    const promoted = recordMatchKeys(record).map((matchKey) => byMatchAndUser.get(`${matchKey}:${record.userIdentityCode}`)).find(Boolean);
-    if (promoted?.trainingIncluded) {
-      record.trainingIncluded = true;
-      record.trainingMatchId = record.trainingMatchId || promoted.trainingMatchId;
-      record.trainingPromotedAt = record.trainingPromotedAt || promoted.trainingPromotedAt;
-    }
-  }
 }
 
 function upsertPersonalRecords(state, matchRecord) {
   const existing = new Map();
-  for (const record of state.records || []) {
-    for (const matchKey of recordMatchKeys(record)) existing.set(`${matchKey}:${record.userIdentityCode}`, record);
+  for (const record of state.records) {
+    for (const matchKey of [record.fiveE?.matchRecordId, record.fiveE?.fingerprint, record.fiveE?.matchId].filter(Boolean)) {
+      existing.set(`${matchKey}:${record.userIdentityCode}`, record);
+    }
   }
-  for (const player of matchRecord.players || []) {
+  for (const player of matchRecord.players) {
     if (!player.memberCode) continue;
     const key = `${matchRecord.id}:${player.memberCode}`;
     const matchIdKey = `${matchRecord.matchId}:${player.memberCode}`;
@@ -670,7 +400,6 @@ function upsertPersonalRecords(state, matchRecord) {
       matchType: matchRecord.matchType,
       map: matchRecord.map,
       mapName: matchRecord.mapName,
-      arenaUrl: matchRecord.arenaUrl,
       isWin: matchRecord.scoreA !== matchRecord.scoreB ? player.team === (matchRecord.scoreA > matchRecord.scoreB ? "2" : "1") : false,
       swingScore: player.swingScore,
       kill: player.kill,
@@ -695,7 +424,7 @@ function upsertPersonalRecords(state, matchRecord) {
       });
       continue;
     }
-    state.records.push({
+    const created = {
       id: `5e-${matchRecord.fingerprint}-${player.memberCode}`,
       userIdentityCode: player.memberCode,
       date: matchRecord.date,
@@ -710,7 +439,92 @@ function upsertPersonalRecords(state, matchRecord) {
       createdAt: new Date().toISOString(),
       source: "5e-match-sync",
       fiveE: nextFiveE,
-    });
+    };
+    state.records.push(created);
+    existing.set(key, created);
+    existing.set(matchIdKey, created);
+    existing.set(fingerprintKey, created);
+  }
+}
+
+function normalizeExistingMatches(state, indexes) {
+  const byMatch = new Map();
+  for (const record of state.matchRecords || []) {
+    record.players = dedupePlayers((record.players || []).map((player) => {
+      if (player.memberCode) return player;
+      const member = recognizeMember({
+        domain: player.domain,
+        uuid: player.uuid,
+        username: player.nickname || player.name,
+        player_name: player.nickname || player.name,
+      }, indexes);
+      return member ? { ...player, memberCode: member.identityCode, isClubMember: true } : player;
+    }));
+    record.recognizedMemberCodes = [...new Set(record.players.filter((player) => player.memberCode).map((player) => player.memberCode))];
+    record.isTrainingCandidate = record.recognizedMemberCodes.filter((code) => isTrainingEligible(state, code)).length >= 3;
+    record.fingerprint = record.fingerprint || matchFingerprint(record);
+    record.id = record.id || `match-${record.fingerprint}`;
+    const key = record.matchId || record.fingerprint;
+    const current = byMatch.get(key);
+    if (!current || (record.players || []).length > (current.players || []).length) {
+      byMatch.set(key, record);
+    }
+  }
+  state.matchRecords = [...byMatch.values()];
+}
+
+function normalizeExistingPersonalRecords(state) {
+  const byMatchAndUser = new Map();
+  const passthrough = [];
+  const mergeTrainingFlags = (target, source) => {
+    if (source.trainingIncluded) target.trainingIncluded = true;
+    if (source.trainingMatchId && !target.trainingMatchId) target.trainingMatchId = source.trainingMatchId;
+    if (source.trainingPromotedAt && !target.trainingPromotedAt) target.trainingPromotedAt = source.trainingPromotedAt;
+  };
+  for (const record of state.records || []) {
+    const matchKey = record.fiveE?.matchId || record.fiveE?.matchRecordId || record.fiveE?.fingerprint || "";
+    if (!matchKey || !record.userIdentityCode) {
+      passthrough.push(record);
+      continue;
+    }
+    const key = `${matchKey}:${record.userIdentityCode}`;
+    const current = byMatchAndUser.get(key);
+    if (!current) {
+      byMatchAndUser.set(key, record);
+      continue;
+    }
+    const next = String(record.updatedAt || record.createdAt || "") > String(current.updatedAt || current.createdAt || "")
+      ? record
+      : current;
+    mergeTrainingFlags(next, current);
+    mergeTrainingFlags(next, record);
+    byMatchAndUser.set(key, next);
+  }
+  state.records = [...passthrough, ...byMatchAndUser.values()];
+}
+
+function normalizeTrainingIncludedRecords(state) {
+  const byMatchAndUser = new Map();
+  for (const record of state.records || []) {
+    if (!record.trainingIncluded || !record.userIdentityCode) continue;
+    const matchKey = record.fiveE?.matchId || record.trainingMatchId || record.fiveE?.matchRecordId || record.fiveE?.fingerprint || "";
+    if (!matchKey) continue;
+    byMatchAndUser.set(`${matchKey}:${record.userIdentityCode}`, record);
+  }
+  for (const record of state.records || []) {
+    if (!record.userIdentityCode) continue;
+    const keys = [
+      record.fiveE?.matchId,
+      record.trainingMatchId,
+      record.fiveE?.matchRecordId,
+      record.fiveE?.fingerprint,
+    ].filter(Boolean).map((matchKey) => `${matchKey}:${record.userIdentityCode}`);
+    const promoted = keys.map((key) => byMatchAndUser.get(key)).find(Boolean);
+    if (promoted?.trainingIncluded) {
+      record.trainingIncluded = true;
+      record.trainingMatchId = record.trainingMatchId || promoted.trainingMatchId;
+      record.trainingPromotedAt = record.trainingPromotedAt || promoted.trainingPromotedAt;
+    }
   }
 }
 
@@ -725,24 +539,24 @@ export async function onRequestPost({ request, env }) {
     const state = await readState(env.DB);
     if (!state) return json({ error: "数据库还没有初始化，请先登录一次。" }, 404);
 
-    const actor = state.users?.find((user) => user.identityCode === session.identity_code);
+    const actor = state.users.find((user) => user.identityCode === session.identity_code);
     if (!isAdmin(actor)) return json({ error: "只有管理员可以一键同步全员对局。" }, 403);
 
     const body = await request.json().catch(() => ({}));
-    const maxPages = Math.max(1, Math.min(100, Number(body.maxPages || body.pages || 100)));
+    const page = Math.max(1, Math.min(3, Number(body.page || 1)));
     normalizeUserAliases(state);
-    normalizeFiveEProfiles(state);
-
-    const seeds = (state.users || [])
-      .map((user) => ({ user, profile: parse5eProfile(user.fiveEProfileUrl, user.fiveEDomain) }))
+    const seeds = state.users
+      .map((user) => ({ user, profile: parse5eProfile(user.fiveEProfileUrl || user.fiveEDomain) }))
       .filter((item) => item.profile.domain);
     if (!seeds.length) return json({ error: "还没有成员绑定 5E 个人主页链接。" }, 400);
 
     const matchSeeds = new Map();
-    const listFailures = [];
     for (const seed of seeds) {
-      const items = await discoverHistoryForProfile(seed, maxPages, listFailures);
-      for (const item of items) addMatchSeed(matchSeeds, item, seed.profile.domain, seed.user.identityCode);
+      const listData = await fetch5eJson(`/v0/mars/api/csgo/match_data/match_list?domain=${encodeURIComponent(seed.profile.domain)}&match_type=&time=&date_time=0&map_name=&page=${page}`);
+      for (const item of (listData.match_list || []).slice(0, 20)) {
+        if (!item.match_id || matchSeeds.has(item.match_id)) continue;
+        matchSeeds.set(item.match_id, { item, domain: seed.profile.domain });
+      }
       seed.user.fiveEDomain = seed.profile.domain;
       if (seed.profile.uuid) seed.user.fiveEUuid = seed.profile.uuid;
       if (seed.profile.profileUrl) seed.user.fiveEProfileUrl = seed.profile.profileUrl;
@@ -754,34 +568,28 @@ export async function onRequestPost({ request, env }) {
     const indexes = buildMemberIndexes(state.users);
     normalizeExistingMatches(state, indexes);
     normalizeExistingPersonalRecords(state);
+    for (const matchRecord of state.matchRecords) {
+      const existingSeed = matchSeedFromRecord(matchRecord, seeds);
+      if (existingSeed && !matchSeeds.has(matchRecord.matchId)) matchSeeds.set(matchRecord.matchId, existingSeed);
+    }
     normalizeTrainingIncludedRecords(state);
-
     const existingByFingerprint = new Map(state.matchRecords.map((record) => [record.fingerprint || matchFingerprint(record), record]));
     const existingByMatchId = new Map(state.matchRecords.map((record) => [record.matchId, record]).filter(([matchId]) => matchId));
     let created = 0;
     let updated = 0;
-    let arenaVisited = 0;
-    let arenaBlocked = 0;
-    let arenaParsed = 0;
-    let detailFailures = 0;
-    const detailFailureSamples = [];
+    let refreshedExisting = 0;
 
-    for (const seed of matchSeeds.values()) {
-      const detailMeta = await fetchMatchDetail(seed, detailFailureSamples);
-      if (detailMeta.arenaVisited) arenaVisited += 1;
-      if (detailMeta.arenaBlocked) arenaBlocked += 1;
-      if (detailMeta.arenaParsed) arenaParsed += 1;
-      if (!detailMeta.detail) {
-        detailFailures += 1;
-        continue;
-      }
-      const next = buildMatchRecord(state, seed, detailMeta.detail, indexes, detailMeta);
+    for (const [matchId, seed] of matchSeeds.entries()) {
+      const detail = await fetch5eJson(`/v0/mars/api/csgo/data/player_match_info/${encodeURIComponent(matchId)}/${encodeURIComponent(seed.domain)}`).catch(() => null);
+      if (!detail) continue;
+      const next = buildMatchRecord(state, seed.item, detail, indexes);
       const existing = existingByMatchId.get(next.matchId) || existingByFingerprint.get(next.fingerprint);
       if (existing) {
         Object.assign(existing, next, { isTrainingConfirmed: existing.isTrainingConfirmed || false });
         existingByFingerprint.set(existing.fingerprint, existing);
         existingByMatchId.set(existing.matchId, existing);
         updated += 1;
+        if (seed.existing) refreshedExisting += 1;
         upsertPersonalRecords(state, existing);
       } else {
         state.matchRecords.push(next);
@@ -791,25 +599,17 @@ export async function onRequestPost({ request, env }) {
         upsertPersonalRecords(state, next);
       }
     }
-
     normalizeTrainingIncludedRecords(state);
     normalizeExistingPersonalRecords(state);
 
     await writeState(env.DB, state);
     return json({
       ok: true,
-      syncVersion: SYNC_VERSION,
       seedMembers: seeds.length,
-      scannedPages: maxPages,
       scannedMatches: matchSeeds.size,
+      refreshedExisting,
       created,
       updated,
-      listFailures: listFailures.length,
-      detailFailures,
-      detailFailureSamples: detailFailureSamples.slice(0, 8),
-      arenaVisited,
-      arenaBlocked,
-      arenaParsed,
       state,
     });
   } catch (error) {

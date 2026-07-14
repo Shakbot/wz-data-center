@@ -1,39 +1,39 @@
 import { ensureSchema, isAdmin, json, readState, userFromRequest, writeState } from "./_utils.js";
 
-const SYNC_VERSION = "8.2";
+const SYNC_VERSION = "8.3 alpha";
 
-function matchKeys(match) {
-  return new Set([match?.id, match?.matchId, match?.fingerprint].filter(Boolean).map(String));
-}
-
-function requestKeys(body) {
-  const keys = new Set([body.id, body.matchId, body.fingerprint].filter(Boolean).map(String));
-  for (const id of body.ids || []) if (id) keys.add(String(id));
-  for (const matchId of body.matchIds || []) if (matchId) keys.add(String(matchId));
-  for (const match of body.matches || []) {
-    for (const value of [match?.id, match?.matchId, match?.fingerprint]) {
-      if (value) keys.add(String(value));
-    }
+function collectRequestKeys(body) {
+  const keys = new Set();
+  for (const value of [body.id, body.matchId, body.fingerprint]) {
+    if (value) keys.add(String(value));
+  }
+  for (const value of body.ids || []) {
+    if (value) keys.add(String(value));
+  }
+  for (const value of body.matchIds || []) {
+    if (value) keys.add(String(value));
   }
   return keys;
 }
 
-function isFiveERecord(record) {
-  const source = String(record?.source || "");
-  return source.startsWith("5e")
-    || Boolean(record?.fiveE)
+function collectMatchKeys(match) {
+  return new Set([match?.id, match?.matchId, match?.fingerprint].filter(Boolean).map(String));
+}
+
+function isFiveEMatchRecord(record) {
+  return String(record?.source || "").startsWith("5e")
     || String(record?.createdBy || "").startsWith("5e")
-    || String(record?.id || "").startsWith("5e-");
+    || Boolean(record?.fiveE);
 }
 
 function recordBelongsToDeletedMatch(record, deletedKeys) {
-  const candidates = [
+  const keys = [
     record?.fiveE?.matchRecordId,
     record?.fiveE?.matchId,
     record?.fiveE?.fingerprint,
     record?.trainingMatchId,
   ].filter(Boolean).map(String);
-  return candidates.some((key) => deletedKeys.has(key));
+  return keys.some((key) => deletedKeys.has(key));
 }
 
 export async function onRequestPost({ request, env }) {
@@ -51,31 +51,35 @@ export async function onRequestPost({ request, env }) {
     if (!isAdmin(actor)) return json({ error: "只有拥有全体管理权限的用户可以删除已同步对局。" }, 403);
 
     const body = await request.json().catch(() => ({}));
-    const requested = requestKeys(body);
-    if (!requested.size) return json({ error: "缺少要删除的对局标识。" }, 400);
+    const requestedKeys = collectRequestKeys(body);
+    if (!requestedKeys.size) return json({ error: "缺少要删除的对局标识。" }, 400);
 
-    const matches = Array.isArray(state.matchRecords) ? state.matchRecords : [];
+    const keptMatches = [];
     const deletedKeys = new Set();
     let removedMatches = 0;
-    const keptMatches = [];
-    for (const match of matches) {
-      const keys = matchKeys(match);
-      const shouldDelete = [...keys].some((key) => requested.has(key));
+
+    for (const match of state.matchRecords || []) {
+      const matchKeys = collectMatchKeys(match);
+      const shouldDelete = [...matchKeys].some((key) => requestedKeys.has(key));
       if (!shouldDelete) {
         keptMatches.push(match);
         continue;
       }
-      for (const key of keys) deletedKeys.add(key);
       removedMatches += 1;
+      for (const key of matchKeys) deletedKeys.add(key);
     }
-    if (!deletedKeys.size) return json({ error: "没有找到要删除的对局。" }, 404);
 
-    state.matchRecords = keptMatches;
+    if (!removedMatches) return json({ error: "没有找到要删除的对局。" }, 404);
+
     const beforeRecords = Array.isArray(state.records) ? state.records.length : 0;
-    state.records = (state.records || []).filter((record) => !(isFiveERecord(record) && recordBelongsToDeletedMatch(record, deletedKeys)));
+    state.matchRecords = keptMatches;
+    state.records = (state.records || []).filter((record) => {
+      return !(isFiveEMatchRecord(record) && recordBelongsToDeletedMatch(record, deletedKeys));
+    });
     const removedRecords = beforeRecords - state.records.length;
 
     await writeState(env.DB, state);
+
     return json({
       ok: true,
       syncVersion: SYNC_VERSION,
