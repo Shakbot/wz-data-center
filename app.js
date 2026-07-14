@@ -391,9 +391,16 @@ function startBusyTask(title, lines = SYNC_BUSY_LINES) {
     if (!busyTask?.lines?.length) return;
     busyLineIndex = (busyLineIndex + 1) % busyTask.lines.length;
     busyTask.line = busyTask.lines[busyLineIndex];
-    render();
+    const lineNode = document.querySelector(".busy-dialog > span:last-child");
+    if (lineNode) lineNode.textContent = busyTask.line;
   }, 1400);
   render();
+}
+
+function updateSyncStatus(message) {
+  syncStatus = message;
+  const statusNode = document.querySelector(".sync-error");
+  if (statusNode) statusNode.textContent = message;
 }
 
 function stopBusyTask(shouldRender = true) {
@@ -2550,8 +2557,7 @@ async function syncMatchCatalog({ syncMode = "all" } = {}) {
       let batchAttempt = 0;
       while (batchAttempt < 3) {
         batchAttempt += 1;
-        syncStatus = `正在读取第 ${cursor.memberIndex + 1} 位成员，第 ${cursor.page} 页${recentOnly ? "近期" : "历史"}战绩${batchAttempt > 1 ? `（重试 ${batchAttempt - 1}/2）` : ""}...`;
-        render();
+        updateSyncStatus(`正在读取第 ${cursor.memberIndex + 1} 位成员，第 ${cursor.page} 页${recentOnly ? "近期" : "历史"}战绩${batchAttempt > 1 ? `（重试 ${batchAttempt - 1}/2）` : ""}...`);
         try {
           body = await api("/api/sync-matches", {
             method: "POST",
