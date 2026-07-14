@@ -39,8 +39,21 @@ export async function readSyncContext(db) {
 
 export async function writeSyncContext(db, state) {
   const payload = JSON.stringify({
-    users: Array.isArray(state?.users) ? state.users : [],
-    seasons: Array.isArray(state?.seasons) ? state.seasons : [],
+    users: (Array.isArray(state?.users) ? state.users : []).map((user) => ({
+      identityCode: user.identityCode,
+      role: user.role,
+      gameId: user.gameId,
+      name: user.name,
+      fiveEProfileUrl: user.fiveEProfileUrl,
+      fiveEDomain: user.fiveEDomain,
+      fiveEUuid: user.fiveEUuid,
+      fiveEAliases: user.fiveEAliases,
+    })),
+    seasons: (Array.isArray(state?.seasons) ? state.seasons : []).map((season) => ({
+      id: season.id,
+      start: season.start,
+      end: season.end,
+    })),
   });
   const updatedAt = new Date().toISOString();
   await db.prepare(`
