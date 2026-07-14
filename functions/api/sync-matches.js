@@ -870,7 +870,7 @@ export async function onRequestPost({ request, env }) {
     const session = await userFromRequest(request, env.DB);
     const body = await request.json().catch(() => ({}));
     if (!session) return json({ error: "请重新登录。" }, 401);
-    if (!body.matchId) return syncCatalogPage(body, env, session);
+    if (!body.matchId) return await syncCatalogPage(body, env, session);
     const state = await readState(env.DB);
     if (!state) return json({ error: "数据库还没有初始化，请先登录一次。" }, 404);
     const actor = state.users.find((user) => user.identityCode === session.identity_code);
