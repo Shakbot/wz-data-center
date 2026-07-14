@@ -1,4 +1,4 @@
-import { ensureSchema, isAdmin, json, readState, userFromRequest, writeMatchDetail, writeState } from "./_utils.js";
+import { ensureSchema, isAdmin, json, readMatchCatalog, readState, userFromRequest, writeMatchCatalog, writeMatchDetail, writeState } from "./_utils.js";
 
 const FIVE_E_BASE = "https://ya-api-app.5eplay.com";
 const SYNC_VERSION = "8.4";
@@ -490,7 +490,7 @@ function hasCompleteDetail(record) {
 
 function summaryForClient(record) {
   const { players, ctPlayers, tPlayers, ...summary } = record;
-  return summary;
+  return { ...summary, catalogStored: true };
 }
 
 function personalRecordsForMatch(state, matchRecord) {
@@ -767,6 +767,10 @@ export async function onRequestPost({ request, env }) {
     state.records = state.records || [];
 
     if (body.matchId) {
+      if (!state.matchRecords.some((match) => match.matchId === String(body.matchId) || match.id === String(body.matchId))) {
+        const catalogMatch = (await readMatchCatalog(env.DB, [String(body.matchId)]))[0];
+        if (catalogMatch) state.matchRecords.push({ players: [], ctPlayers: [], tPlayers: [], ...catalogMatch });
+      }
       const result = await syncSingleMatch(state, String(body.matchId));
       if (result.error) {
         await writeState(env.DB, state);
@@ -782,6 +786,7 @@ export async function onRequestPost({ request, env }) {
       result.match.hasSideDetails = true;
       result.match.ctPlayers = [];
       result.match.tPlayers = [];
+      await writeMatchCatalog(env.DB, [summaryForClient(result.match)]);
       await writeState(env.DB, state);
       return json({
         ok: true,
@@ -848,31 +853,36 @@ export async function onRequestPost({ request, env }) {
     if (seed.profile.uuid) seed.user.fiveEUuid = seed.profile.uuid;
     if (seed.profile.profileUrl) seed.user.fiveEProfileUrl = seed.profile.profileUrl;
 
-    const indexes = buildMemberIndexes(state.users);
-    normalizeExistingMatches(state, indexes);
+    const catalogMatches = await readMatchCatalog(env.DB, pageItems.map((item) => String(item.match_id)));
     const existingByMatchId = new Map(state.matchRecords.map((record) => [String(record.matchId || ""), record]).filter(([id]) => id));
+    for (const catalogMatch of catalogMatches) {
+      const existing = existingByMatchId.get(String(catalogMatch.matchId));
+      if (existing) Object.assign(existing, catalogMatch);
+      else existingByMatchId.set(String(catalogMatch.matchId), { players: [], ctPlayers: [], tPlayers: [], ...catalogMatch });
+    }
     let created = 0;
     let merged = 0;
+    const changedMatches = [];
     for (const item of pageItems) {
       const summary = buildSummaryRecord(state, item, seed);
       const existing = existingByMatchId.get(summary.matchId);
       if (existing) {
         mergeSummaryRecord(existing, summary);
         existing.isTrainingCandidate = existing.recognizedMemberCodes.filter((code) => isTrainingEligible(state, code)).length >= 3;
+        changedMatches.push(summaryForClient(existing));
         merged += 1;
       } else {
-        state.matchRecords.push(summary);
         existingByMatchId.set(summary.matchId, summary);
+        changedMatches.push(summaryForClient(summary));
         created += 1;
       }
     }
 
-    if (memberFinished) seed.user.fiveELastSyncAt = new Date().toISOString();
     const nextCursor = memberFinished
       ? { memberIndex: memberIndex + 1, page: 1 }
       : { memberIndex, page: page + 1, previousPageSignature: pageSignature };
     const done = nextCursor.memberIndex >= seeds.length;
-    await writeState(env.DB, state);
+    await writeMatchCatalog(env.DB, changedMatches);
     return json({
       ok: true,
       done,

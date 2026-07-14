@@ -1,4 +1,4 @@
-import { deleteMatchDetails, ensureSchema, isAdmin, json, readState, userFromRequest, writeState } from "./_utils.js";
+import { deleteMatchCatalog, deleteMatchDetails, ensureSchema, isAdmin, json, readMatchCatalog, readState, userFromRequest, writeState } from "./_utils.js";
 
 const SYNC_VERSION = "8.4";
 
@@ -50,6 +50,14 @@ export async function onRequestPost({ request, env }) {
     const actor = state.users?.find((user) => user.identityCode === session.identity_code);
     if (!isAdmin(actor)) return json({ error: "只有拥有全体管理权限的用户可以删除已同步对局。" }, 403);
 
+    state.matchRecords = state.matchRecords || [];
+    const byMatchId = new Map(state.matchRecords.map((match) => [String(match.matchId || ""), match]).filter(([id]) => id));
+    for (const summary of await readMatchCatalog(env.DB)) {
+      const existing = byMatchId.get(String(summary.matchId || ""));
+      if (existing) Object.assign(existing, summary);
+      else state.matchRecords.push({ players: [], ctPlayers: [], tPlayers: [], ...summary });
+    }
+
     const body = await request.json().catch(() => ({}));
     const requestedKeys = collectRequestKeys(body);
     if (!requestedKeys.size) return json({ error: "缺少要删除的对局标识。" }, 400);
@@ -81,6 +89,7 @@ export async function onRequestPost({ request, env }) {
     const removedRecords = beforeRecords - state.records.length;
 
     await deleteMatchDetails(env.DB, deletedMatchIds);
+    await deleteMatchCatalog(env.DB, deletedMatchIds);
     await writeState(env.DB, state);
 
     return json({

@@ -1,4 +1,25 @@
-import { ensureSchema, isAdmin, json, readState, userFromRequest, writeMatchDetail, writeState } from "./_utils.js";
+import { ensureSchema, isAdmin, json, readMatchCatalog, readState, userFromRequest, writeMatchCatalog, writeMatchDetail, writeState } from "./_utils.js";
+
+function catalogSummary(match) {
+  const { players, ctPlayers, tPlayers, ...summary } = match;
+  return { ...summary, catalogStored: true };
+}
+
+function mergeCatalog(state, catalog) {
+  state.matchRecords = state.matchRecords || [];
+  const byMatchId = new Map(state.matchRecords.map((match) => [String(match.matchId || ""), match]).filter(([id]) => id));
+  for (const summary of catalog || []) {
+    const key = String(summary.matchId || "");
+    const existing = byMatchId.get(key);
+    if (existing) {
+      Object.assign(existing, summary);
+      continue;
+    }
+    const created = { players: [], ctPlayers: [], tPlayers: [], ...summary };
+    state.matchRecords.push(created);
+    byMatchId.set(key, created);
+  }
+}
 
 async function persistAndCompactMatchDetails(db, state) {
   for (const match of state.matchRecords || []) {
@@ -25,6 +46,7 @@ export async function onRequestGet({ request, env }) {
 
     const state = await readState(env.DB);
     if (!state) return json({ error: "数据库还没有初始化，请先登录一次。" }, 404);
+    mergeCatalog(state, await readMatchCatalog(env.DB));
     return json({ state, identityCode: session.identity_code });
   } catch (error) {
     return json({ error: error.message || String(error) }, 500);
@@ -50,6 +72,7 @@ export async function onRequestPut({ request, env }) {
     }
 
     await persistAndCompactMatchDetails(env.DB, body.state);
+    await writeMatchCatalog(env.DB, (body.state.matchRecords || []).map(catalogSummary));
     await writeState(env.DB, body.state);
     return json({ ok: true, state: body.state });
   } catch (error) {

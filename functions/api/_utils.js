@@ -24,6 +24,51 @@ export async function ensureSchema(db) {
   await db
     .prepare("CREATE TABLE IF NOT EXISTS match_details (match_id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at TEXT NOT NULL)")
     .run();
+  await db
+    .prepare("CREATE TABLE IF NOT EXISTS match_catalog (match_id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at TEXT NOT NULL)")
+    .run();
+}
+
+export async function readMatchCatalog(db, matchIds = null) {
+  const ids = matchIds ? [...new Set(matchIds.map(String).filter(Boolean))] : null;
+  if (ids && !ids.length) return [];
+  if (!ids) {
+    const rows = await db.prepare("SELECT payload FROM match_catalog").all();
+    return (rows.results || []).map((row) => JSON.parse(row.payload));
+  }
+  const results = [];
+  for (let offset = 0; offset < ids.length; offset += 50) {
+    const batch = ids.slice(offset, offset + 50);
+    const placeholders = batch.map(() => "?").join(",");
+    const rows = await db.prepare(`SELECT payload FROM match_catalog WHERE match_id IN (${placeholders})`).bind(...batch).all();
+    results.push(...(rows.results || []).map((row) => JSON.parse(row.payload)));
+  }
+  return results;
+}
+
+export async function writeMatchCatalog(db, matches) {
+  const updatedAt = new Date().toISOString();
+  const unique = [...new Map((matches || []).filter((match) => match?.matchId).map((match) => [String(match.matchId), match])).values()];
+  const statements = unique.map((match) => db.prepare(`
+    INSERT INTO match_catalog (match_id, payload, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(match_id) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at
+  `).bind(String(match.matchId), JSON.stringify(match), updatedAt));
+  if (!statements.length) return;
+  if (typeof db.batch === "function") {
+    for (let offset = 0; offset < statements.length; offset += 50) await db.batch(statements.slice(offset, offset + 50));
+    return;
+  }
+  for (const statement of statements) await statement.run();
+}
+
+export async function deleteMatchCatalog(db, matchIds) {
+  const ids = [...new Set((matchIds || []).map(String).filter(Boolean))];
+  for (let offset = 0; offset < ids.length; offset += 50) {
+    const batch = ids.slice(offset, offset + 50);
+    const placeholders = batch.map(() => "?").join(",");
+    await db.prepare(`DELETE FROM match_catalog WHERE match_id IN (${placeholders})`).bind(...batch).run();
+  }
 }
 
 export async function readMatchDetail(db, matchId) {
