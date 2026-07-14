@@ -2,7 +2,7 @@ const STORE_KEY = "og-esports-club-v2";
 const SESSION_KEY = "og-esports-session-v2";
 const TOKEN_KEY = "og-esports-token-v2";
 const PREF_KEY = "og-esports-preferences-v2";
-const APP_VERSION = "8.3 beta";
+const APP_VERSION = "8.3 Gamma";
 
 const IMPORTED_RECORDS = Array.isArray(window.IMPORTED_TRAINING_RECORDS)
   ? window.IMPORTED_TRAINING_RECORDS
@@ -2449,6 +2449,7 @@ async function syncAllMatches() {
       updated: 0,
       skipped: 0,
       failures: new Set(),
+      memberFailures: new Set(),
     };
     const visitedCursors = new Set();
 
@@ -2488,6 +2489,9 @@ async function syncAllMatches() {
       totals.updated += batchUpdated;
       totals.skipped += Number(body.skippedComplete || 0);
       for (const matchId of body.completedMatchIds || []) totals.failures.delete(matchId);
+      for (const failure of body.memberFailures || []) {
+        totals.memberFailures.add(failure.memberCode || failure.memberName || `${body.memberIndex ?? "member"}`);
+      }
       for (const failure of body.failures || []) {
         totals.failures.add(failure.matchId);
       }
@@ -2506,7 +2510,8 @@ async function syncAllMatches() {
     data = normalizeData(finalState || stateBody.state);
     syncStatus = "";
     stopBusyTask(false);
-    const failureText = totals.failures.size ? `，仍有 ${totals.failures.size} 场详情暂时无法读取，请再次同步重试` : "，全部详情完整";
+    const issueCount = totals.failures.size + totals.memberFailures.size;
+    const failureText = issueCount ? `，仍有 ${issueCount} 项暂时无法读取，请再次同步重试` : "，全部详情完整";
     alert(`全历史对局同步完成：扫描 ${totals.scanned} 条成员战绩，新增 ${totals.created} 场，修复或更新 ${totals.updated} 场，跳过已完整 ${totals.skipped} 场${failureText}。`);
   } catch (error) {
     syncStatus = error.message;

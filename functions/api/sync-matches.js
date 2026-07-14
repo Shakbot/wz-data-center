@@ -3,6 +3,7 @@ import { ensureSchema, isAdmin, json, readState, userFromRequest, writeState } f
 const FIVE_E_BASE = "https://ya-api-app.5eplay.com";
 const DETAIL_CONCURRENCY = 4;
 const DETAIL_BATCH_SIZE = 5;
+const SYNC_VERSION = "8.3 Gamma";
 const SYNC_ROLES = new Set([
   "总教练",
   "常务副总教练",
@@ -588,13 +589,43 @@ export async function onRequestPost({ request, env }) {
       .filter((item) => SYNC_ROLES.has(String(item.user.role || "").trim()) && item.profile.domain);
     if (!seeds.length) return json({ error: "指定角色中还没有成员绑定 5E 个人主页链接。" }, 400);
     if (memberIndex >= seeds.length) {
-      return json({ ok: true, done: true, seedMembers: seeds.length, state });
+      return json({ ok: true, done: true, seedMembers: seeds.length, syncVersion: SYNC_VERSION });
     }
 
     const seed = seeds[memberIndex];
     const listPath = `/v0/mars/api/csgo/match_data/match_list?domain=${encodeURIComponent(seed.profile.domain)}&match_type=&time=&date_time=0&map_name=&page=${page}`;
-    const listData = await fetch5eJson(listPath, 3);
-    const pageItems = [...new Map((Array.isArray(listData.match_list) ? listData.match_list : [])
+    let listData;
+    try {
+      listData = await fetch5eJson(listPath, 3);
+    } catch (error) {
+      return json({
+        ok: true,
+        done: memberIndex + 1 >= seeds.length,
+        seedMembers: seeds.length,
+        syncVersion: SYNC_VERSION,
+        memberIndex,
+        memberCode: seed.user.identityCode,
+        memberName: seed.user.gameId || seed.user.name || seed.user.identityCode,
+        page,
+        offset,
+        scannedMatches: 0,
+        attemptedDetails: 0,
+        skippedComplete: 0,
+        detailFailures: 0,
+        failures: [],
+        memberFailures: [{
+          memberCode: seed.user.identityCode,
+          memberName: seed.user.gameId || seed.user.name || seed.user.identityCode,
+          domain: seed.profile.domain,
+          error: error.message || String(error),
+        }],
+        completedMatchIds: [],
+        nextCursor: { memberIndex: memberIndex + 1, page: 1, offset: 0 },
+        created: 0,
+        updated: 0,
+      });
+    }
+    const pageItems = [...new Map((Array.isArray(listData?.match_list) ? listData.match_list : [])
       .filter((item) => item?.match_id)
       .map((item) => [item.match_id, item])).values()];
 
@@ -681,22 +712,23 @@ export async function onRequestPost({ request, env }) {
       ok: true,
       done,
       seedMembers: seeds.length,
+      syncVersion: SYNC_VERSION,
       memberIndex,
       memberCode: seed.user.identityCode,
       memberName: seed.user.gameId || seed.user.name || seed.user.identityCode,
       page,
       offset,
       remainingPageDetails: Math.max(0, pageItems.length - offset - DETAIL_BATCH_SIZE),
-      scannedMatches: pageItems.length,
+      scannedMatches: offset === 0 ? pageItems.length : 0,
       attemptedDetails: detailQueue.length,
       skippedComplete,
       detailFailures: failures.length,
       failures,
+      memberFailures: [],
       completedMatchIds: [...new Set(completedMatchIds)],
       nextCursor,
       created,
       updated,
-      state: done ? state : undefined,
     });
   } catch (error) {
     return json({ error: error.message || String(error) }, 500);
