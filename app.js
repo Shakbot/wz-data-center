@@ -2,7 +2,7 @@ const STORE_KEY = "og-esports-club-v2";
 const SESSION_KEY = "og-esports-session-v2";
 const TOKEN_KEY = "og-esports-token-v2";
 const PREF_KEY = "og-esports-preferences-v2";
-const APP_VERSION = "8.3 Gamma";
+const APP_VERSION = "8.3 Delta";
 
 const IMPORTED_RECORDS = Array.isArray(window.IMPORTED_TRAINING_RECORDS)
   ? window.IMPORTED_TRAINING_RECORDS
@@ -180,6 +180,7 @@ let sidebarOpen = false;
 let booting = true;
 let syncStatus = "";
 let selectedMatchId = "";
+let selectedMatchScope = "full";
 let selectedMatchIds = new Set();
 let selectedRecordIds = new Set();
 let savingData = false;
@@ -724,7 +725,7 @@ function renderMatches() {
           <div class="sync-row">
             <div>
               <strong>一键同步所有成员参与的 5E 对局</strong>
-              <div class="date-line">遍历所有已绑定 5E 链接的成员，按 matchId 去重保存整场比赛。</div>
+              <div class="date-line">遍历指定角色成员的全部历史战绩，按 matchID 合并为待完善条目；单场详情由“再同步”独立获取。</div>
             </div>
             <button class="primary" data-action="sync-all-matches">一键同步对局</button>
           </div>
@@ -761,6 +762,10 @@ function renderMatchCard(match) {
   const outcome = matchOutcome(match);
   const matchKey = match.id || match.matchId;
   const admin = isAdmin();
+  const detailComplete = match.detailStatus === "complete"
+    && Array.isArray(match.players) && match.players.length
+    && Array.isArray(match.ctPlayers) && match.ctPlayers.length
+    && Array.isArray(match.tPlayers) && match.tPlayers.length;
   return `
     <article class="panel match-card ${outcome.className}">
       <div class="panel-body">
@@ -777,6 +782,7 @@ function renderMatchCard(match) {
           </div>
           <div class="inline-actions">
             <span class="chip">${members.length} 名成员</span>
+            <span class="match-detail-status ${detailComplete ? "complete" : "pending"}">${detailComplete ? "已完善" : "待完善"}</span>
             ${match.isTrainingCandidate ? `<span class="mini-badge">赛训候选</span>` : ""}
             ${match.isTrainingConfirmed ? `<span class="mini-badge">已确认赛训</span>` : ""}
             ${admin && matchKey ? `
@@ -785,6 +791,7 @@ function renderMatchCard(match) {
                 <span>选择</span>
               </label>
             ` : ""}
+            ${match.matchId ? `<button class="ghost" data-action="resync-match" data-id="${escapeHtml(match.matchId)}">再同步</button>` : ""}
             <button class="ghost" data-action="open-match-detail" data-id="${escapeHtml(match.id || match.matchId)}">查看详情</button>
           </div>
         </div>
@@ -837,7 +844,13 @@ function matchOutcome(match) {
 function renderMatchDetail(matchId) {
   const match = (data.matchRecords || []).find((item) => item.id === matchId || item.matchId === matchId);
   if (!match) return "";
-  const players = matchDetailPlayers(match.players || []);
+  const scopeMap = {
+    full: { label: "全场", players: match.players || [] },
+    ct: { label: "CT 半场", players: match.ctPlayers || [] },
+    t: { label: "T 半场", players: match.tPlayers || [] },
+  };
+  const scope = scopeMap[selectedMatchScope] ? selectedMatchScope : "full";
+  const players = matchDetailPlayers(scopeMap[scope].players);
   const rwsRatings = matchRwsRatings(players);
   const rows = players.map((player) => {
     const member = player.memberCode ? userByCode(player.memberCode) : null;
@@ -857,22 +870,30 @@ function renderMatchDetail(matchId) {
         <td><span class="rws-rank-badge ${rating.className}">${escapeHtml(rating.label)}</span><br><span class="date-line">RWS 第 ${rating.rank} 名</span></td>
       </tr>
     `;
-  }).join("");
+  }).join("") || `<tr><td colspan="8" class="empty">该范围的数据尚未完善，请点击“再同步”。</td></tr>`;
+  const detailComplete = match.detailStatus === "complete"
+    && (match.players || []).length && (match.ctPlayers || []).length && (match.tPlayers || []).length;
   return `
     <div class="modal-backdrop" data-action="close-match-detail">
       <div class="match-detail-modal" role="dialog" aria-modal="true">
         <div class="panel-head">
           <div>
             <h3>${escapeHtml(match.mapName || match.map || "5E 对局")} · ${escapeHtml(match.scoreA ?? "-")} : ${escapeHtml(match.scoreB ?? "-")}</h3>
-            <div class="date-line">${escapeHtml(match.date || "")} · ${escapeHtml(match.matchName || "")} · Match ${escapeHtml(match.matchId)}</div>
+            <div class="date-line">${escapeHtml(match.date || "")} · ${escapeHtml(match.matchName || "")} · Match ${escapeHtml(match.matchId)} · <a href="https://arena.5eplay.com/data/match/${encodeURIComponent(match.matchId)}" target="_blank" rel="noreferrer">5E 原始详情</a></div>
           </div>
           <button class="icon-button" data-action="close-match-detail" aria-label="Close">×</button>
         </div>
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>玩家</th><th>阵营</th><th>杀/助/死</th><th>ADR</th><th>KAST</th><th>RWS</th><th>Rating</th><th>评价</th></tr></thead>
-            <tbody>${rows}</tbody>
-          </table>
+        <div class="match-detail-layout">
+          <div class="table-wrap">
+            ${detailComplete ? "" : `<div class="match-detail-notice"><strong>该对局待完善</strong><span>场次已经记录；点击再同步后，将按 matchID 获取全场、CT、T 三套数据。</span><button class="primary" data-action="resync-match" data-id="${escapeHtml(match.matchId)}">再同步</button></div>`}
+            <table>
+              <thead><tr><th>玩家</th><th>阵营</th><th>杀/助/死</th><th>ADR</th><th>KAST</th><th>RWS</th><th>Rating</th><th>评价</th></tr></thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div>
+          <div class="match-scope-switch" role="tablist" aria-label="数据范围">
+            ${Object.entries(scopeMap).map(([key, item]) => `<button type="button" role="tab" class="${scope === key ? "active" : ""}" aria-selected="${scope === key}" data-action="match-detail-scope" data-scope="${key}"><strong>${escapeHtml(item.label)}</strong><span>${item.players.length || 0} 人</span></button>`).join("")}
+          </div>
         </div>
       </div>
     </div>
@@ -2045,14 +2066,21 @@ document.addEventListener("click", async (event) => {
     if (season) await promoteTraining(null, season);
   }
   if (action === "sync-all-matches") await syncAllMatches();
+  if (action === "resync-match") await resyncMatch(button.dataset.id);
   if (action === "delete-selected-matches") await deleteSelectedMatches();
   if (action === "open-match-detail") {
     selectedMatchId = button.dataset.id;
+    selectedMatchScope = "full";
+    render();
+  }
+  if (action === "match-detail-scope") {
+    selectedMatchScope = button.dataset.scope || "full";
     render();
   }
   if (action === "close-match-detail") {
     if (button.classList.contains("modal-backdrop") && event.target !== button) return;
     selectedMatchId = "";
+    selectedMatchScope = "full";
     render();
   }
   if (action === "save-record") await saveRecord(button.dataset.id);
@@ -2437,35 +2465,29 @@ async function sync5e(identityCode) {
 }
 
 async function syncAllMatches() {
-  startBusyTask("正在同步全员对局", SYNC_BUSY_LINES);
-  syncStatus = "正在遍历指定角色成员的全部 5E 历史对局...";
+  startBusyTask("正在建立全量对局目录", SYNC_BUSY_LINES);
+  syncStatus = "正在遍历指定角色成员的全部 5E 历史战绩，只记录场次信息...";
   render();
   try {
     let cursor = { memberIndex: 0, page: 1 };
-    let finalState = null;
     const totals = {
       scanned: 0,
       created: 0,
-      updated: 0,
-      skipped: 0,
-      failures: new Set(),
+      merged: 0,
       memberFailures: new Set(),
     };
     const visitedCursors = new Set();
 
     while (true) {
-      const cursorKey = `${cursor.memberIndex}:${cursor.page}:${cursor.offset || 0}`;
+      const cursorKey = `${cursor.memberIndex}:${cursor.page}`;
       if (visitedCursors.has(cursorKey)) throw new Error("同步游标没有前进，请稍后重试。");
       visitedCursors.add(cursorKey);
 
       let body;
       let batchAttempt = 0;
-      let batchCreated = 0;
-      let batchUpdated = 0;
       while (batchAttempt < 3) {
         batchAttempt += 1;
-        const offsetText = cursor.offset ? `，第 ${cursor.offset + 1} 条起` : "";
-        syncStatus = `正在同步第 ${cursor.memberIndex + 1} 位成员，第 ${cursor.page} 页历史战绩${offsetText}${batchAttempt > 1 ? `（重试 ${batchAttempt - 1}/2）` : ""}...`;
+        syncStatus = `正在读取第 ${cursor.memberIndex + 1} 位成员，第 ${cursor.page} 页历史战绩${batchAttempt > 1 ? `（重试 ${batchAttempt - 1}/2）` : ""}...`;
         render();
         try {
           body = await api("/api/sync-matches", {
@@ -2477,46 +2499,64 @@ async function syncAllMatches() {
           await new Promise((resolve) => setTimeout(resolve, batchAttempt * 600));
           continue;
         }
-
-        batchCreated += Number(body.created || 0);
-        batchUpdated += Number(body.updated || 0);
-        if (!body.detailFailures || batchAttempt >= 3) break;
-        await new Promise((resolve) => setTimeout(resolve, batchAttempt * 600));
+        break;
       }
 
       totals.scanned += Number(body.scannedMatches || 0);
-      totals.created += batchCreated;
-      totals.updated += batchUpdated;
-      totals.skipped += Number(body.skippedComplete || 0);
-      for (const matchId of body.completedMatchIds || []) totals.failures.delete(matchId);
+      totals.created += Number(body.created || 0);
+      totals.merged += Number(body.merged || 0);
       for (const failure of body.memberFailures || []) {
         totals.memberFailures.add(failure.memberCode || failure.memberName || `${body.memberIndex ?? "member"}`);
       }
-      for (const failure of body.failures || []) {
-        totals.failures.add(failure.matchId);
-      }
 
-      if (body.done) {
-        finalState = body.state;
-        break;
-      }
+      if (body.done) break;
       cursor = body.nextCursor;
       if (!cursor || !Number.isFinite(Number(cursor.memberIndex)) || !Number.isFinite(Number(cursor.page))) {
         throw new Error("5E 同步返回了无效游标。");
       }
     }
 
-    const stateBody = finalState ? null : await api("/api/state");
-    data = normalizeData(finalState || stateBody.state);
+    const stateBody = await api("/api/state");
+    data = normalizeData(stateBody.state);
     syncStatus = "";
     stopBusyTask(false);
-    const issueCount = totals.failures.size + totals.memberFailures.size;
-    const failureText = issueCount ? `，仍有 ${issueCount} 项暂时无法读取，请再次同步重试` : "，全部详情完整";
-    alert(`全历史对局同步完成：扫描 ${totals.scanned} 条成员战绩，新增 ${totals.created} 场，修复或更新 ${totals.updated} 场，跳过已完整 ${totals.skipped} 场${failureText}。`);
+    const pending = (data.matchRecords || []).filter((match) => match.detailStatus !== "complete" || !(match.ctPlayers || []).length || !(match.tPlayers || []).length).length;
+    const failureText = totals.memberFailures.size ? `；${totals.memberFailures.size} 位成员主页暂时无法读取` : "";
+    alert(`对局目录同步完成：扫描 ${totals.scanned} 条成员战绩，新增 ${totals.created} 场，合并重复记录 ${totals.merged} 条；当前待完善 ${pending} 场${failureText}。`);
   } catch (error) {
     syncStatus = error.message;
     stopBusyTask(false);
     alert(`对局同步失败：${error.message}`);
+  }
+  render();
+}
+
+async function resyncMatch(matchId) {
+  if (!matchId) return;
+  const match = (data.matchRecords || []).find((item) => item.matchId === matchId || item.id === matchId);
+  startBusyTask("正在同步单场详情", [
+    `正在按 matchID ${matchId} 读取比赛详情。`,
+    "正在获取全场数据。",
+    "正在获取 CT 半场数据。",
+    "正在获取 T 半场数据。",
+  ]);
+  syncStatus = `正在完善 ${match?.mapName || match?.map || matchId} 的三套数据...`;
+  render();
+  try {
+    const body = await api("/api/sync-matches", {
+      method: "POST",
+      body: JSON.stringify({ matchId }),
+    });
+    const stateBody = await api("/api/state");
+    data = normalizeData(stateBody.state);
+    selectedMatchScope = "full";
+    syncStatus = "";
+    stopBusyTask(false);
+    alert(`对局详情已完善：全场 ${body.fullPlayers} 人、CT ${body.ctPlayers} 人、T ${body.tPlayers} 人。`);
+  } catch (error) {
+    syncStatus = error.message;
+    stopBusyTask(false);
+    alert(`该场对局再同步失败：${error.message}`);
   }
   render();
 }

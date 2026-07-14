@@ -736,6 +736,29 @@ button:disabled {
   font-weight: 900;
 }
 
+.match-detail-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.match-detail-status.pending {
+  color: #ffd28b;
+  border-color: rgba(255, 164, 66, 0.36);
+  background: rgba(255, 164, 66, 0.1);
+}
+
+.match-detail-status.complete {
+  color: var(--success);
+  border-color: rgba(70, 209, 140, 0.36);
+  background: rgba(70, 209, 140, 0.1);
+}
+
 .match-grid {
   display: grid;
   gap: 12px;
@@ -940,6 +963,110 @@ button:disabled {
   z-index: 1;
   background: rgba(18, 18, 22, 0.96);
   backdrop-filter: blur(10px);
+}
+
+.match-detail-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 112px;
+  align-items: start;
+}
+
+.match-detail-layout > .table-wrap {
+  min-width: 0;
+}
+
+.match-detail-notice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  color: var(--soft);
+  border-bottom: 1px solid var(--line);
+  background: rgba(255, 164, 66, 0.08);
+}
+
+.match-detail-notice strong {
+  color: #ffd28b;
+  white-space: nowrap;
+}
+
+.match-detail-notice span {
+  flex: 1;
+}
+
+.match-scope-switch {
+  position: sticky;
+  top: 82px;
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border-left: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.match-scope-switch button {
+  display: grid;
+  place-items: center;
+  gap: 3px;
+  width: 92px;
+  min-height: 62px;
+  padding: 8px;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: color 0.18s ease, background 0.18s ease, border-color 0.18s ease, transform 0.18s ease;
+}
+
+.match-scope-switch button:hover {
+  color: var(--text);
+  border-color: var(--line);
+  transform: translateX(-2px);
+}
+
+.match-scope-switch button.active {
+  color: #111;
+  border-color: var(--orange-2);
+  background: var(--orange-2);
+  box-shadow: 0 8px 24px rgba(255, 122, 24, 0.2);
+}
+
+.match-scope-switch span {
+  font-size: 11px;
+  opacity: 0.72;
+}
+
+@media (max-width: 760px) {
+  .match-detail-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .match-scope-switch {
+    position: sticky;
+    top: 76px;
+    z-index: 2;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-row: 1;
+    padding: 8px;
+    border-left: 0;
+    border-bottom: 1px solid var(--line);
+    backdrop-filter: blur(10px);
+  }
+
+  .match-scope-switch button {
+    width: 100%;
+    min-height: 48px;
+  }
+
+  .match-scope-switch button:hover {
+    transform: translateY(-1px);
+  }
+
+  .match-detail-notice {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
 }
 
 .club-player-row td {

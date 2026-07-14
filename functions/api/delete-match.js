@@ -1,6 +1,6 @@
 import { ensureSchema, isAdmin, json, readState, userFromRequest, writeState } from "./_utils.js";
 
-const SYNC_VERSION = "8.3 Gamma";
+const SYNC_VERSION = "8.3 Delta";
 
 function collectRequestKeys(body) {
   const keys = new Set();

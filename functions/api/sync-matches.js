@@ -1,9 +1,7 @@
 import { ensureSchema, isAdmin, json, readState, userFromRequest, writeState } from "./_utils.js";
 
 const FIVE_E_BASE = "https://ya-api-app.5eplay.com";
-const DETAIL_CONCURRENCY = 4;
-const DETAIL_BATCH_SIZE = 5;
-const SYNC_VERSION = "8.3 Gamma";
+const SYNC_VERSION = "8.3 Delta";
 const SYNC_ROLES = new Set([
   "总教练",
   "常务副总教练",
@@ -121,7 +119,7 @@ function normalizeUserAliases(state) {
   }
 }
 
-async function fetch5eJson(path, attempts = 1) {
+async function fetch5eJson(path, attempts = 1, referer = "https://csgo.5eplay.com/fwap/") {
   let lastError;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
@@ -129,7 +127,7 @@ async function fetch5eJson(path, attempts = 1) {
         headers: {
           "accept": "application/json,text/plain,*/*",
           "user-agent": "Mozilla/5.0",
-          "referer": "https://csgo.5eplay.com/fwap/",
+          referer,
         },
       });
       const body = await response.json().catch(() => null);
@@ -141,20 +139,6 @@ async function fetch5eJson(path, attempts = 1) {
     }
   }
   throw lastError || new Error("5E 接口请求失败。");
-}
-
-async function mapWithConcurrency(items, limit, worker) {
-  const results = new Array(items.length);
-  let nextIndex = 0;
-  async function run() {
-    while (nextIndex < items.length) {
-      const index = nextIndex;
-      nextIndex += 1;
-      results[index] = await worker(items[index], index);
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => run()));
-  return results;
 }
 
 function rowsWithTeam(rows, fallbackTeam = "") {
@@ -196,6 +180,73 @@ function matchFingerprint(match) {
     match.mapName || match.map,
     `${match.scoreA}-${match.scoreB}`,
   ].map(compactKey).join("__");
+}
+
+function uniqueStrings(...groups) {
+  return [...new Set(groups.flat().map((value) => String(value || "").trim()).filter(Boolean))];
+}
+
+function buildSummaryRecord(state, listItem, seed) {
+  const date = dateFromUnix(listItem.end_time || listItem.start_time);
+  const season = findSeasonForDate(state, date);
+  const group1Score = firstNumber(listItem, ["group1_all_score", "group1_score", "team1_score", "score1", "a_score"], NaN);
+  const group2Score = firstNumber(listItem, ["group2_all_score", "group2_score", "team2_score", "score2", "b_score"], NaN);
+  const matchId = String(listItem.match_id || "").trim();
+  const record = {
+    id: `match-${compactKey(matchId)}`,
+    matchId,
+    date,
+    endTime: String(listItem.end_time || ""),
+    map: String(listItem.map || ""),
+    mapName: String(listItem.map_name || listItem.map_desc || ""),
+    matchName: String(listItem.match_name || ""),
+    matchType: String(listItem.match_type || ""),
+    scoreA: Number.isFinite(group2Score) ? group2Score : "",
+    scoreB: Number.isFinite(group1Score) ? group1Score : "",
+    seasonId: season ? season.id : "",
+    recognizedMemberCodes: [seed.user.identityCode],
+    discoveredByMemberCodes: [seed.user.identityCode],
+    discoveredByDomains: [seed.profile.domain],
+    isTrainingCandidate: false,
+    isTrainingConfirmed: false,
+    players: [],
+    ctPlayers: [],
+    tPlayers: [],
+    detailStatus: "pending",
+    detailPlayerCount: 0,
+    detailUrl: `https://arena.5eplay.com/data/match/${encodeURIComponent(matchId)}`,
+    discoveredAt: new Date().toISOString(),
+  };
+  record.fingerprint = matchFingerprint(record);
+  return record;
+}
+
+function mergeSummaryRecord(existing, summary) {
+  const preserve = {
+    id: existing.id,
+    fingerprint: existing.fingerprint,
+    players: existing.players,
+    ctPlayers: existing.ctPlayers,
+    tPlayers: existing.tPlayers,
+    detailStatus: existing.detailStatus,
+    detailPlayerCount: existing.detailPlayerCount,
+    detailSyncedAt: existing.detailSyncedAt,
+    syncedAt: existing.syncedAt,
+    isTrainingConfirmed: existing.isTrainingConfirmed,
+  };
+  for (const key of ["date", "endTime", "map", "mapName", "matchName", "matchType", "scoreA", "scoreB", "seasonId", "detailUrl"]) {
+    if (summary[key] !== "" && summary[key] != null) existing[key] = summary[key];
+  }
+  existing.recognizedMemberCodes = uniqueStrings(existing.recognizedMemberCodes || [], summary.recognizedMemberCodes || []);
+  existing.discoveredByMemberCodes = uniqueStrings(existing.discoveredByMemberCodes || [], summary.discoveredByMemberCodes || []);
+  existing.discoveredByDomains = uniqueStrings(existing.discoveredByDomains || [], summary.discoveredByDomains || []);
+  existing.discoveredAt = existing.discoveredAt || summary.discoveredAt;
+  Object.assign(existing, Object.fromEntries(Object.entries(preserve).filter(([, value]) => value !== undefined)));
+  if (!hasCompleteDetail(existing)) {
+    existing.detailStatus = "pending";
+    existing.detailPlayerCount = 0;
+  }
+  return existing;
 }
 
 function buildMemberIndexes(users) {
@@ -377,15 +428,24 @@ function buildMatchRecord(state, listItem, detail, indexes, seedUser) {
   const date = dateFromUnix(main.end_time || main.start_time || listItem.end_time || listItem.start_time);
   const season = findSeasonForDate(state, date);
   const sourceRows = readScoreboardRows(detail);
+  const ctRows = rowsWithTeam(detail.ct_user_match_data);
+  const tRows = rowsWithTeam(detail.t_user_match_data);
   const players = dedupePlayers(sourceRows.map((row) => buildPlayer(row, indexes)));
+  const ctPlayers = dedupePlayers(ctRows.map((row) => buildPlayer(row, indexes)));
+  const tPlayers = dedupePlayers(tRows.map((row) => buildPlayer(row, indexes)));
   const expectedPlayers = Math.min(sourceRows.length, 10);
   if (!players.length || players.length < expectedPlayers) throw new Error("详情接口返回的选手数据不完整");
-  const recognizedMemberCodes = [...new Set(players.filter((player) => player.memberCode).map((player) => player.memberCode))];
+  if (!ctRows.length || !tRows.length || !ctPlayers.length || !tPlayers.length) throw new Error("详情接口未返回完整的 CT/T 半场数据");
+  const recognizedMemberCodes = uniqueStrings(
+    listItem.recognizedMemberCodes || [],
+    players.filter((player) => player.memberCode).map((player) => player.memberCode),
+  );
   const trainingMemberCodes = recognizedMemberCodes.filter((code) => isTrainingEligible(state, code));
   const group1Score = firstNumber(main, ["group1_all_score", "group1_score", "team1_score", "score1", "a_score"], firstNumber(listItem, ["group1_all_score", "group1_score", "team1_score", "score1", "a_score"]));
   const group2Score = firstNumber(main, ["group2_all_score", "group2_score", "team2_score", "score2", "b_score"], firstNumber(listItem, ["group2_all_score", "group2_score", "team2_score", "score2", "b_score"]));
   const record = {
-    matchId: listItem.match_id,
+    id: listItem.id,
+    matchId: listItem.match_id || listItem.matchId,
     date,
     endTime: String(main.end_time || listItem.end_time || ""),
     map: String(main.map || listItem.map || ""),
@@ -399,13 +459,19 @@ function buildMatchRecord(state, listItem, detail, indexes, seedUser) {
     isTrainingCandidate: trainingMemberCodes.length >= 3,
     isTrainingConfirmed: false,
     players,
+    ctPlayers,
+    tPlayers,
     detailStatus: "complete",
     detailPlayerCount: sourceRows.length,
+    detailUrl: listItem.detailUrl || `https://arena.5eplay.com/data/match/${encodeURIComponent(listItem.match_id || listItem.matchId)}`,
+    detailSyncedAt: new Date().toISOString(),
+    discoveredByMemberCodes: uniqueStrings(listItem.discoveredByMemberCodes || [], seedUser?.identityCode || ""),
+    discoveredByDomains: uniqueStrings(listItem.discoveredByDomains || [], resolve5eProfile(seedUser).domain),
     syncedFromMemberCode: seedUser?.identityCode || "",
     syncedAt: new Date().toISOString(),
   };
   record.fingerprint = matchFingerprint(record);
-  record.id = `match-${record.fingerprint}`;
+  record.id = record.id || `match-${compactKey(record.matchId)}`;
   return record;
 }
 
@@ -413,7 +479,11 @@ function hasCompleteDetail(record) {
   return record?.detailStatus === "complete"
     && Number(record.detailPlayerCount || 0) > 0
     && Array.isArray(record.players)
-    && record.players.length > 0;
+    && record.players.length > 0
+    && Array.isArray(record.ctPlayers)
+    && record.ctPlayers.length > 0
+    && Array.isArray(record.tPlayers)
+    && record.tPlayers.length > 0;
 }
 
 function upsertPersonalRecords(state, matchRecord) {
@@ -483,6 +553,31 @@ function upsertPersonalRecords(state, matchRecord) {
   }
 }
 
+function replacePersonalRecordsForMatch(state, matchRecord, previousMatchKeys = []) {
+  const matchKeys = new Set([matchRecord.matchId, matchRecord.id, matchRecord.fingerprint, ...previousMatchKeys].filter(Boolean));
+  const preservedTraining = new Map();
+  state.records = (state.records || []).filter((record) => {
+    const recordKeys = [record.fiveE?.matchId, record.fiveE?.matchRecordId, record.fiveE?.fingerprint, record.trainingMatchId].filter(Boolean);
+    const belongsToMatch = recordKeys.some((key) => matchKeys.has(key));
+    const isAutoRecord = record.source === "5e-match-sync" || record.createdBy === "5e-sync";
+    if (!belongsToMatch || !isAutoRecord) return true;
+    if (record.trainingIncluded && record.userIdentityCode) {
+      preservedTraining.set(record.userIdentityCode, {
+        trainingIncluded: true,
+        trainingMatchId: record.trainingMatchId,
+        trainingPromotedAt: record.trainingPromotedAt,
+      });
+    }
+    return false;
+  });
+  upsertPersonalRecords(state, matchRecord);
+  for (const record of state.records) {
+    const preserved = preservedTraining.get(record.userIdentityCode);
+    if (!preserved || record.fiveE?.matchId !== matchRecord.matchId) continue;
+    Object.assign(record, preserved);
+  }
+}
+
 function normalizeExistingMatches(state, indexes) {
   const byMatch = new Map();
   for (const record of state.matchRecords || []) {
@@ -502,9 +597,22 @@ function normalizeExistingMatches(state, indexes) {
     record.id = record.id || `match-${record.fingerprint}`;
     const key = record.matchId || record.fingerprint;
     const current = byMatch.get(key);
-    if (!current || (record.players || []).length > (current.players || []).length) {
+    if (!current) {
       byMatch.set(key, record);
+      continue;
     }
+    const preferred = (record.players || []).length > (current.players || []).length ? record : current;
+    const secondary = preferred === record ? current : record;
+    preferred.recognizedMemberCodes = uniqueStrings(preferred.recognizedMemberCodes || [], secondary.recognizedMemberCodes || []);
+    preferred.discoveredByMemberCodes = uniqueStrings(preferred.discoveredByMemberCodes || [], secondary.discoveredByMemberCodes || []);
+    preferred.discoveredByDomains = uniqueStrings(preferred.discoveredByDomains || [], secondary.discoveredByDomains || []);
+    if (!(preferred.ctPlayers || []).length && (secondary.ctPlayers || []).length) preferred.ctPlayers = secondary.ctPlayers;
+    if (!(preferred.tPlayers || []).length && (secondary.tPlayers || []).length) preferred.tPlayers = secondary.tPlayers;
+    if (hasCompleteDetail(secondary) && !hasCompleteDetail(preferred)) {
+      preferred.detailStatus = secondary.detailStatus;
+      preferred.detailPlayerCount = secondary.detailPlayerCount;
+    }
+    byMatch.set(key, preferred);
   }
   state.matchRecords = [...byMatch.values()];
 }
@@ -564,6 +672,67 @@ function normalizeTrainingIncludedRecords(state) {
   }
 }
 
+async function syncSingleMatch(state, matchId) {
+  const match = (state.matchRecords || []).find((record) => record.matchId === matchId || record.id === matchId);
+  if (!match) return { error: "没有找到这场对局。", status: 404 };
+
+  const usersByDomain = new Map();
+  for (const user of state.users || []) {
+    const profile = resolve5eProfile(user);
+    if (profile.domain) usersByDomain.set(profile.domain, { user, profile });
+  }
+  const sourceMemberCodes = uniqueStrings(
+    match.recognizedMemberCodes || [],
+    match.discoveredByMemberCodes || [],
+    match.syncedFromMemberCode || "",
+  );
+  const memberDomains = sourceMemberCodes
+    .map((code) => state.users.find((user) => user.identityCode === code))
+    .filter(Boolean)
+    .map((user) => resolve5eProfile(user).domain);
+  let domains = uniqueStrings(
+    match.discoveredByDomains || [],
+    match.syncedFromDomain || "",
+    memberDomains,
+  );
+  if (!domains.length) domains = [...usersByDomain.keys()];
+  if (!domains.length) return { error: "该对局没有可用于读取详情的 5E 用户域名，请先重新执行一键同步。", status: 400 };
+
+  let lastError;
+  for (const domain of domains) {
+    try {
+      const previousMatchKeys = [match.matchId, match.id, match.fingerprint].filter(Boolean);
+      const detailPath = `/v0/mars/api/csgo/data/player_match_info/${encodeURIComponent(match.matchId)}/${encodeURIComponent(domain)}`;
+      const detailUrl = `https://arena.5eplay.com/data/match/${encodeURIComponent(match.matchId)}`;
+      const detail = await fetch5eJson(detailPath, 3, detailUrl);
+      const source = usersByDomain.get(domain) || { user: null, profile: { domain } };
+      const indexes = buildMemberIndexes(state.users || []);
+      const next = buildMatchRecord(
+        state,
+        { ...match, match_id: match.matchId, discoveredByDomains: domains },
+        detail,
+        indexes,
+        source.user,
+      );
+      next.discoveredByDomains = domains;
+      next.syncedFromDomain = domain;
+      next.isTrainingConfirmed = Boolean(match.isTrainingConfirmed);
+      Object.assign(match, next);
+      replacePersonalRecordsForMatch(state, match, previousMatchKeys);
+      normalizeTrainingIncludedRecords(state);
+      normalizeExistingPersonalRecords(state);
+      return { match, domain };
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  match.detailStatus = "pending";
+  match.detailLastAttemptAt = new Date().toISOString();
+  match.detailLastError = lastError?.message || "5E 详情暂时无法读取。";
+  return { error: match.detailLastError, status: 502, match };
+}
+
 export async function onRequestPost({ request, env }) {
   try {
     if (!env.DB) return json({ error: "D1 数据库没有绑定到 DB。" }, 500);
@@ -571,19 +740,33 @@ export async function onRequestPost({ request, env }) {
 
     const session = await userFromRequest(request, env.DB);
     if (!session) return json({ error: "请重新登录。" }, 401);
-
     const state = await readState(env.DB);
     if (!state) return json({ error: "数据库还没有初始化，请先登录一次。" }, 404);
-
     const actor = state.users.find((user) => user.identityCode === session.identity_code);
-    if (!isAdmin(actor)) return json({ error: "只有管理员可以一键同步全员对局。" }, 403);
-
     const body = await request.json().catch(() => ({}));
+    if (!body.matchId && !isAdmin(actor)) return json({ error: "只有管理员可以建立全量对局目录。" }, 403);
+    normalizeUserAliases(state);
+    state.matchRecords = state.matchRecords || [];
+    state.records = state.records || [];
+
+    if (body.matchId) {
+      const result = await syncSingleMatch(state, String(body.matchId));
+      await writeState(env.DB, state);
+      if (result.error) return json({ error: result.error, matchId: body.matchId, syncVersion: SYNC_VERSION }, result.status || 500);
+      return json({
+        ok: true,
+        matchId: result.match.matchId,
+        detailStatus: result.match.detailStatus,
+        fullPlayers: result.match.players.length,
+        ctPlayers: result.match.ctPlayers.length,
+        tPlayers: result.match.tPlayers.length,
+        syncVersion: SYNC_VERSION,
+      });
+    }
+
     const requestedCursor = body.cursor && typeof body.cursor === "object" ? body.cursor : {};
     const memberIndex = Math.max(0, Math.floor(Number(requestedCursor.memberIndex || 0)));
     const page = Math.max(1, Math.floor(Number(requestedCursor.page || 1)));
-    const offset = Math.max(0, Math.floor(Number(requestedCursor.offset || 0)));
-    normalizeUserAliases(state);
     const seeds = state.users
       .map((user) => ({ user, profile: resolve5eProfile(user) }))
       .filter((item) => SYNC_ROLES.has(String(item.user.role || "").trim()) && item.profile.domain);
@@ -607,106 +790,55 @@ export async function onRequestPost({ request, env }) {
         memberCode: seed.user.identityCode,
         memberName: seed.user.gameId || seed.user.name || seed.user.identityCode,
         page,
-        offset,
         scannedMatches: 0,
-        attemptedDetails: 0,
-        skippedComplete: 0,
-        detailFailures: 0,
-        failures: [],
         memberFailures: [{
           memberCode: seed.user.identityCode,
           memberName: seed.user.gameId || seed.user.name || seed.user.identityCode,
           domain: seed.profile.domain,
           error: error.message || String(error),
         }],
-        completedMatchIds: [],
-        nextCursor: { memberIndex: memberIndex + 1, page: 1, offset: 0 },
+        nextCursor: { memberIndex: memberIndex + 1, page: 1 },
         created: 0,
-        updated: 0,
+        merged: 0,
+        pending: 0,
       });
     }
+
     const pageItems = [...new Map((Array.isArray(listData?.match_list) ? listData.match_list : [])
       .filter((item) => item?.match_id)
-      .map((item) => [item.match_id, item])).values()];
+      .map((item) => [String(item.match_id), item])).values()];
+    const pageSignature = pageItems.map((item) => item.match_id).join(",");
+    const repeatedPage = Boolean(pageItems.length && requestedCursor.previousPageSignature === pageSignature);
+    const memberFinished = pageItems.length === 0 || repeatedPage;
 
     seed.user.fiveEDomain = seed.profile.domain;
     if (seed.profile.uuid) seed.user.fiveEUuid = seed.profile.uuid;
     if (seed.profile.profileUrl) seed.user.fiveEProfileUrl = seed.profile.profileUrl;
 
-    state.matchRecords = state.matchRecords || [];
-    state.records = state.records || [];
     const indexes = buildMemberIndexes(state.users);
     normalizeExistingMatches(state, indexes);
-    normalizeExistingPersonalRecords(state);
-    normalizeTrainingIncludedRecords(state);
-    const existingByFingerprint = new Map(state.matchRecords.map((record) => [record.fingerprint || matchFingerprint(record), record]));
-    const existingByMatchId = new Map(state.matchRecords.map((record) => [record.matchId, record]).filter(([matchId]) => matchId));
+    const existingByMatchId = new Map(state.matchRecords.map((record) => [String(record.matchId || ""), record]).filter(([id]) => id));
     let created = 0;
-    let updated = 0;
-    let skippedComplete = 0;
-    const pageSlice = pageItems.slice(offset, offset + DETAIL_BATCH_SIZE);
-    const detailQueue = [];
-    for (const item of pageSlice) {
-      const existing = existingByMatchId.get(item.match_id);
-      if (hasCompleteDetail(existing)) {
-        skippedComplete += 1;
-        upsertPersonalRecords(state, existing);
-      } else {
-        detailQueue.push(item);
-      }
-    }
-
-    const detailResults = await mapWithConcurrency(detailQueue, DETAIL_CONCURRENCY, async (item) => {
-      try {
-        const detailPath = `/v0/mars/api/csgo/data/player_match_info/${encodeURIComponent(item.match_id)}/${encodeURIComponent(seed.profile.domain)}`;
-        const detail = await fetch5eJson(detailPath, 2);
-        return { item, next: buildMatchRecord(state, item, detail, indexes, seed.user) };
-      } catch (error) {
-        return { item, error: error.message || String(error) };
-      }
-    });
-
-    const failures = [];
-    const completedMatchIds = pageSlice
-      .filter((item) => hasCompleteDetail(existingByMatchId.get(item.match_id)))
-      .map((item) => item.match_id);
-    for (const result of detailResults) {
-      if (result.error) {
-        failures.push({ matchId: result.item.match_id, error: result.error });
-        continue;
-      }
-      const next = result.next;
-      completedMatchIds.push(next.matchId);
-      const existing = existingByMatchId.get(next.matchId) || existingByFingerprint.get(next.fingerprint);
+    let merged = 0;
+    for (const item of pageItems) {
+      const summary = buildSummaryRecord(state, item, seed);
+      const existing = existingByMatchId.get(summary.matchId);
       if (existing) {
-        Object.assign(existing, next, { isTrainingConfirmed: existing.isTrainingConfirmed || false });
-        existingByFingerprint.set(existing.fingerprint, existing);
-        existingByMatchId.set(existing.matchId, existing);
-        updated += 1;
-        upsertPersonalRecords(state, existing);
+        mergeSummaryRecord(existing, summary);
+        existing.isTrainingCandidate = existing.recognizedMemberCodes.filter((code) => isTrainingEligible(state, code)).length >= 3;
+        merged += 1;
       } else {
-        state.matchRecords.push(next);
-        existingByFingerprint.set(next.fingerprint, next);
-        existingByMatchId.set(next.matchId, next);
+        state.matchRecords.push(summary);
+        existingByMatchId.set(summary.matchId, summary);
         created += 1;
-        upsertPersonalRecords(state, next);
       }
     }
-    normalizeTrainingIncludedRecords(state);
-    normalizeExistingPersonalRecords(state);
 
-    const pageSignature = pageItems.map((item) => item.match_id).join(",");
-    const repeatedPage = Boolean(pageItems.length && offset === 0 && requestedCursor.previousPageSignature === pageSignature);
-    const pageHasMoreWork = offset + DETAIL_BATCH_SIZE < pageItems.length;
-    const memberFinished = pageItems.length === 0 || repeatedPage;
     if (memberFinished) seed.user.fiveELastSyncAt = new Date().toISOString();
     const nextCursor = memberFinished
       ? { memberIndex: memberIndex + 1, page: 1 }
-      : pageHasMoreWork
-        ? { memberIndex, page, offset: offset + DETAIL_BATCH_SIZE, previousPageSignature: pageSignature }
-        : { memberIndex, page: page + 1, offset: 0, previousPageSignature: pageSignature };
+      : { memberIndex, page: page + 1, previousPageSignature: pageSignature };
     const done = nextCursor.memberIndex >= seeds.length;
-
     await writeState(env.DB, state);
     return json({
       ok: true,
@@ -717,20 +849,14 @@ export async function onRequestPost({ request, env }) {
       memberCode: seed.user.identityCode,
       memberName: seed.user.gameId || seed.user.name || seed.user.identityCode,
       page,
-      offset,
-      remainingPageDetails: Math.max(0, pageItems.length - offset - DETAIL_BATCH_SIZE),
-      scannedMatches: offset === 0 ? pageItems.length : 0,
-      attemptedDetails: detailQueue.length,
-      skippedComplete,
-      detailFailures: failures.length,
-      failures,
+      scannedMatches: repeatedPage ? 0 : pageItems.length,
       memberFailures: [],
-      completedMatchIds: [...new Set(completedMatchIds)],
       nextCursor,
       created,
-      updated,
+      merged,
+      pending: pageItems.filter((item) => !hasCompleteDetail(existingByMatchId.get(String(item.match_id)))).length,
     });
   } catch (error) {
-    return json({ error: error.message || String(error) }, 500);
+    return json({ error: error.message || String(error), syncVersion: SYNC_VERSION }, 500);
   }
 }
