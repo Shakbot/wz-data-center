@@ -27,6 +27,29 @@ export async function ensureSchema(db) {
   await db
     .prepare("CREATE TABLE IF NOT EXISTS match_catalog (match_id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at TEXT NOT NULL)")
     .run();
+  await db
+    .prepare("CREATE TABLE IF NOT EXISTS sync_context (id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at TEXT NOT NULL)")
+    .run();
+}
+
+export async function readSyncContext(db) {
+  const row = await db.prepare("SELECT payload FROM sync_context WHERE id = ?").bind(STATE_KEY).first();
+  return row?.payload ? JSON.parse(row.payload) : null;
+}
+
+export async function writeSyncContext(db, state) {
+  const payload = JSON.stringify({
+    users: Array.isArray(state?.users) ? state.users : [],
+    seasons: Array.isArray(state?.seasons) ? state.seasons : [],
+  });
+  const updatedAt = new Date().toISOString();
+  await db.prepare(`
+    INSERT INTO sync_context (id, payload, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at
+  `)
+    .bind(STATE_KEY, payload, updatedAt)
+    .run();
 }
 
 export async function readMatchCatalog(db, matchIds = null) {

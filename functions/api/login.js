@@ -1,4 +1,4 @@
-import { createToken, ensureSchema, json, readState, writeState } from "./_utils.js";
+import { createToken, ensureSchema, json, readState, writeState, writeSyncContext } from "./_utils.js";
 
 export async function onRequestPost({ request, env }) {
   try {
@@ -12,6 +12,7 @@ export async function onRequestPost({ request, env }) {
 
     if (!state && body.initialData) {
       state = body.initialData;
+      await writeSyncContext(env.DB, state);
       await writeState(env.DB, state);
     }
 

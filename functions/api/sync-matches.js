@@ -1,4 +1,4 @@
-import { ensureSchema, isAdmin, json, readMatchCatalog, readState, userFromRequest, writeMatchCatalog, writeMatchDetail, writeState } from "./_utils.js";
+import { ensureSchema, isAdmin, json, readMatchCatalog, readState, readSyncContext, userFromRequest, writeMatchCatalog, writeMatchDetail, writeState, writeSyncContext } from "./_utils.js";
 
 const FIVE_E_BASE = "https://ya-api-app.5eplay.com";
 const SYNC_VERSION = "8.4";
@@ -750,17 +750,130 @@ async function syncSingleMatch(state, matchId) {
   return { error: match.detailLastError, status: 502, match };
 }
 
+async function syncCatalogPage(body, env, session) {
+  let state = await readSyncContext(env.DB);
+  if (!state) {
+    const fullState = await readState(env.DB);
+    if (!fullState) return json({ error: "数据库尚未初始化，请先登录一次。" }, 404);
+    normalizeUserAliases(fullState);
+    await writeMatchCatalog(env.DB, (fullState.matchRecords || []).map(summaryForClient));
+    await writeSyncContext(env.DB, fullState);
+    state = { users: fullState.users || [], seasons: fullState.seasons || [] };
+  }
+
+  normalizeUserAliases(state);
+  state.matchRecords = [];
+  state.records = [];
+  const actor = state.users.find((user) => user.identityCode === session.identity_code);
+  if (!isAdmin(actor)) return json({ error: "只有管理员可以建立全量对局目录。" }, 403);
+
+  const requestedCursor = body.cursor && typeof body.cursor === "object" ? body.cursor : {};
+  const memberIndex = Math.max(0, Math.floor(Number(requestedCursor.memberIndex || 0)));
+  const page = Math.max(1, Math.floor(Number(requestedCursor.page || 1)));
+  const seeds = state.users
+    .map((user) => ({ user, profile: resolve5eProfile(user) }))
+    .filter((item) => SYNC_ROLES.has(String(item.user.role || "").trim()) && item.profile.domain);
+  if (!seeds.length) return json({ error: "指定角色中尚无成员绑定 5E 个人主页。" }, 400);
+  if (memberIndex >= seeds.length) {
+    return json({ ok: true, done: true, seedMembers: seeds.length, matches: [], syncVersion: SYNC_VERSION });
+  }
+
+  const seed = seeds[memberIndex];
+  const listPath = `/v0/mars/api/csgo/match_data/match_list?domain=${encodeURIComponent(seed.profile.domain)}&match_type=&time=&date_time=0&map_name=&page=${page}`;
+  let listData;
+  try {
+    listData = await fetch5eJson(listPath, 3);
+  } catch (error) {
+    return json({
+      ok: true,
+      done: memberIndex + 1 >= seeds.length,
+      seedMembers: seeds.length,
+      syncVersion: SYNC_VERSION,
+      memberIndex,
+      memberCode: seed.user.identityCode,
+      memberName: seed.user.gameId || seed.user.name || seed.user.identityCode,
+      page,
+      scannedMatches: 0,
+      memberFailures: [{
+        memberCode: seed.user.identityCode,
+        memberName: seed.user.gameId || seed.user.name || seed.user.identityCode,
+        domain: seed.profile.domain,
+        error: error.message || String(error),
+      }],
+      nextCursor: { memberIndex: memberIndex + 1, page: 1 },
+      created: 0,
+      merged: 0,
+      pending: 0,
+      matches: [],
+    });
+  }
+
+  const pageItems = [...new Map((Array.isArray(listData?.match_list) ? listData.match_list : [])
+    .filter((item) => item?.match_id)
+    .map((item) => [String(item.match_id), item])).values()];
+  const pageSignature = pageItems.map((item) => item.match_id).join(",");
+  const repeatedPage = Boolean(pageItems.length && requestedCursor.previousPageSignature === pageSignature);
+  const memberFinished = pageItems.length === 0 || repeatedPage;
+  const catalogMatches = await readMatchCatalog(env.DB, pageItems.map((item) => String(item.match_id)));
+  const existingByMatchId = new Map();
+  for (const catalogMatch of catalogMatches) {
+    existingByMatchId.set(String(catalogMatch.matchId), { players: [], ctPlayers: [], tPlayers: [], ...catalogMatch });
+  }
+
+  let created = 0;
+  let merged = 0;
+  const changedMatches = [];
+  for (const item of pageItems) {
+    const summary = buildSummaryRecord(state, item, seed);
+    const existing = existingByMatchId.get(summary.matchId);
+    if (existing) {
+      mergeSummaryRecord(existing, summary);
+      existing.isTrainingCandidate = existing.recognizedMemberCodes.filter((code) => isTrainingEligible(state, code)).length >= 3;
+      changedMatches.push(summaryForClient(existing));
+      merged += 1;
+    } else {
+      existingByMatchId.set(summary.matchId, summary);
+      changedMatches.push(summaryForClient(summary));
+      created += 1;
+    }
+  }
+
+  const nextCursor = memberFinished
+    ? { memberIndex: memberIndex + 1, page: 1 }
+    : { memberIndex, page: page + 1, previousPageSignature: pageSignature };
+  const done = nextCursor.memberIndex >= seeds.length;
+  await writeMatchCatalog(env.DB, changedMatches);
+  return json({
+    ok: true,
+    done,
+    seedMembers: seeds.length,
+    syncVersion: SYNC_VERSION,
+    memberIndex,
+    memberCode: seed.user.identityCode,
+    memberName: seed.user.gameId || seed.user.name || seed.user.identityCode,
+    page,
+    scannedMatches: repeatedPage ? 0 : pageItems.length,
+    memberFailures: [],
+    nextCursor,
+    created,
+    merged,
+    pending: pageItems.filter((item) => !hasCompleteDetail(existingByMatchId.get(String(item.match_id)))).length,
+    matches: pageItems.map((item) => summaryForClient(existingByMatchId.get(String(item.match_id)))),
+  });
+}
+
 export async function onRequestPost({ request, env }) {
   try {
     if (!env.DB) return json({ error: "D1 数据库没有绑定到 DB。" }, 500);
     await ensureSchema(env.DB);
 
     const session = await userFromRequest(request, env.DB);
+    const body = await request.json().catch(() => ({}));
     if (!session) return json({ error: "请重新登录。" }, 401);
+    if (!body.matchId) return syncCatalogPage(body, env, session);
     const state = await readState(env.DB);
     if (!state) return json({ error: "数据库还没有初始化，请先登录一次。" }, 404);
     const actor = state.users.find((user) => user.identityCode === session.identity_code);
-    const body = await request.json().catch(() => ({}));
     if (!body.matchId && !isAdmin(actor)) return json({ error: "只有管理员可以建立全量对局目录。" }, 403);
     normalizeUserAliases(state);
     state.matchRecords = state.matchRecords || [];

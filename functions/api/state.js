@@ -1,4 +1,4 @@
-import { ensureSchema, isAdmin, json, readMatchCatalog, readState, userFromRequest, writeMatchCatalog, writeMatchDetail, writeState } from "./_utils.js";
+import { ensureSchema, isAdmin, json, readMatchCatalog, readState, userFromRequest, writeMatchCatalog, writeMatchDetail, writeState, writeSyncContext } from "./_utils.js";
 
 function catalogSummary(match) {
   const { players, ctPlayers, tPlayers, ...summary } = match;
@@ -73,6 +73,7 @@ export async function onRequestPut({ request, env }) {
 
     await persistAndCompactMatchDetails(env.DB, body.state);
     await writeMatchCatalog(env.DB, (body.state.matchRecords || []).map(catalogSummary));
+    await writeSyncContext(env.DB, body.state);
     await writeState(env.DB, body.state);
     return json({ ok: true, state: body.state });
   } catch (error) {
