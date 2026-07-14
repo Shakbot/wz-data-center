@@ -598,6 +598,42 @@ button:disabled {
   margin: 0;
 }
 
+.match-bulk-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.match-select-all,
+.match-select-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+  user-select: none;
+}
+
+.match-select-all input,
+.match-select-control input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--orange);
+}
+
+.match-select-control {
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
 .fivee-panel {
   margin-top: 18px;
 }
