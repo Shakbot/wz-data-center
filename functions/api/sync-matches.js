@@ -1,7 +1,7 @@
 import { ensureSchema, isAdmin, json, readMatchCatalog, readState, readSyncContext, userFromRequest, writeMatchCatalog, writeMatchDetail, writeState, writeSyncContext } from "./_utils.js";
 
 const FIVE_E_BASE = "https://ya-api-app.5eplay.com";
-const SYNC_VERSION = "8.5 Omega";
+const SYNC_VERSION = "10.0 Alpha";
 const SYNC_ROLES = new Set([
   "总教练",
   "常务副总教练",
@@ -228,31 +228,12 @@ function buildSummaryRecord(state, listItem, seed) {
 }
 
 function mergeSummaryRecord(existing, summary) {
-  const preserve = {
-    id: existing.id,
-    fingerprint: existing.fingerprint,
-    players: existing.players,
-    ctPlayers: existing.ctPlayers,
-    tPlayers: existing.tPlayers,
-    detailStatus: existing.detailStatus,
-    hasSideDetails: existing.hasSideDetails,
-    detailPlayerCount: existing.detailPlayerCount,
-    detailSyncedAt: existing.detailSyncedAt,
-    syncedAt: existing.syncedAt,
-    isTrainingConfirmed: existing.isTrainingConfirmed,
-  };
-  for (const key of ["date", "endTime", "map", "mapName", "matchName", "matchType", "scoreA", "scoreB", "seasonId", "detailUrl"]) {
-    if (summary[key] !== "" && summary[key] != null) existing[key] = summary[key];
-  }
+  // Rediscovery is additive only. Existing summary data, details, and status
+  // remain authoritative until the record is explicitly deleted.
   existing.recognizedMemberCodes = uniqueStrings(existing.recognizedMemberCodes || [], summary.recognizedMemberCodes || []);
   existing.discoveredByMemberCodes = uniqueStrings(existing.discoveredByMemberCodes || [], summary.discoveredByMemberCodes || []);
   existing.discoveredByDomains = uniqueStrings(existing.discoveredByDomains || [], summary.discoveredByDomains || []);
   existing.discoveredAt = existing.discoveredAt || summary.discoveredAt;
-  Object.assign(existing, Object.fromEntries(Object.entries(preserve).filter(([, value]) => value !== undefined)));
-  if (!hasCompleteDetail(existing)) {
-    existing.detailStatus = "pending";
-    existing.detailPlayerCount = 0;
-  }
   return existing;
 }
 

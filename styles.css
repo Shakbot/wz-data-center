@@ -13,6 +13,18 @@
   --accent-rgb: 255, 122, 24;
   --accent-rgb-soft: 255, 191, 71;
   --accent-rgb-deep: 255, 84, 51;
+  --accent-status-text: #ffd28b;
+  --accent-status-border: rgba(255, 164, 66, 0.36);
+  --accent-status-surface: rgba(255, 164, 66, 0.1);
+  --accent-notice-surface: rgba(255, 164, 66, 0.08);
+  --accent-hot-start: #ffd37a;
+  --accent-hot-end: #ff8f3d;
+  --accent-hot-border: rgba(255, 211, 122, 0.75);
+  --accent-muted-surface: rgba(245, 158, 11, 0.22);
+  --accent-muted-border: rgba(245, 158, 11, 0.42);
+  --accent-rank-low-start: #3a2a16;
+  --accent-rank-low-end: #1f1308;
+  --accent-rank-low-border: rgba(120, 72, 24, 0.8);
   --bg-mid: #12100e;
   --bg-end: #090909;
   --danger: #ff4f42;
@@ -33,6 +45,18 @@ body[data-color-theme="azure"] {
   --accent-rgb: 22, 143, 255;
   --accent-rgb-soft: 100, 210, 255;
   --accent-rgb-deep: 52, 115, 255;
+  --accent-status-text: #9bdcff;
+  --accent-status-border: rgba(75, 181, 255, 0.44);
+  --accent-status-surface: rgba(22, 143, 255, 0.12);
+  --accent-notice-surface: rgba(22, 143, 255, 0.09);
+  --accent-hot-start: #8ce7ff;
+  --accent-hot-end: #168fff;
+  --accent-hot-border: rgba(100, 210, 255, 0.76);
+  --accent-muted-surface: rgba(22, 143, 255, 0.18);
+  --accent-muted-border: rgba(75, 181, 255, 0.44);
+  --accent-rank-low-start: #102d42;
+  --accent-rank-low-end: #071723;
+  --accent-rank-low-border: rgba(52, 159, 235, 0.72);
   --bg-mid: #07131d;
   --bg-end: #05090d;
 }
@@ -682,8 +706,8 @@ button:disabled {
 
 .swing-badge.hot {
   color: #18120a;
-  background: linear-gradient(135deg, #ffd37a, #ff8f3d);
-  border-color: rgba(255, 211, 122, 0.75);
+  background: linear-gradient(135deg, var(--accent-hot-start), var(--accent-hot-end));
+  border-color: var(--accent-hot-border);
 }
 
 .swing-badge.good {
@@ -700,8 +724,8 @@ button:disabled {
 
 .swing-badge.npc {
   color: #fff7ed;
-  background: rgba(245, 158, 11, 0.22);
-  border-color: rgba(245, 158, 11, 0.42);
+  background: var(--accent-muted-surface);
+  border-color: var(--accent-muted-border);
 }
 
 .swing-badge.bad,
@@ -747,8 +771,8 @@ button:disabled {
 
 .rws-rank-5 {
   color: #f5e7d7;
-  background: linear-gradient(135deg, #3a2a16, #1f1308);
-  border-color: rgba(120, 72, 24, 0.8);
+  background: linear-gradient(135deg, var(--accent-rank-low-start), var(--accent-rank-low-end));
+  border-color: var(--accent-rank-low-border);
 }
 
 .mini-badge {
@@ -776,9 +800,9 @@ button:disabled {
 }
 
 .match-detail-status.pending {
-  color: #ffd28b;
-  border-color: rgba(255, 164, 66, 0.36);
-  background: rgba(255, 164, 66, 0.1);
+  color: var(--accent-status-text);
+  border-color: var(--accent-status-border);
+  background: var(--accent-status-surface);
 }
 
 .match-detail-status.complete {
@@ -790,6 +814,76 @@ button:disabled {
 .match-grid {
   display: grid;
   gap: 12px;
+}
+
+.match-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+  padding: 12px 0 2px;
+}
+
+.match-page-list {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.match-page-button {
+  display: inline-grid;
+  place-items: center;
+  min-width: 36px;
+  height: 36px;
+  padding: 0 10px;
+  color: var(--soft);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.045);
+  cursor: pointer;
+  transition: color 0.18s ease, border-color 0.18s ease, background 0.18s ease, transform 0.18s ease;
+}
+
+.match-page-button:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--line-strong);
+  background: rgba(var(--accent-rgb), 0.11);
+  transform: translateY(-1px);
+}
+
+.match-page-button.active {
+  color: #09111f;
+  border-color: var(--orange-2);
+  background: var(--orange-2);
+  font-weight: 900;
+}
+
+.match-page-button:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+
+.match-page-step {
+  min-width: 68px;
+}
+
+.match-page-gap,
+.match-page-summary {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.match-page-gap {
+  width: 18px;
+  text-align: center;
+}
+
+.match-page-summary {
+  min-width: 80px;
+  margin-left: 4px;
+  text-align: center;
 }
 
 .match-card {
@@ -1010,11 +1104,11 @@ button:disabled {
   padding: 12px 16px;
   color: var(--soft);
   border-bottom: 1px solid var(--line);
-  background: rgba(255, 164, 66, 0.08);
+  background: var(--accent-notice-surface);
 }
 
 .match-detail-notice strong {
-  color: #ffd28b;
+  color: var(--accent-status-text);
   white-space: nowrap;
 }
 
@@ -2260,6 +2354,22 @@ td {
   .sync-actions,
   .sync-actions button {
     width: 100%;
+  }
+
+  .match-pagination {
+    gap: 7px;
+  }
+
+  .match-page-list {
+    order: 2;
+    width: 100%;
+    justify-content: center;
+  }
+
+  .match-page-summary {
+    order: 3;
+    width: 100%;
+    margin-left: 0;
   }
 
   .rank-row {

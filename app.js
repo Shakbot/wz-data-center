@@ -2,7 +2,8 @@ const STORE_KEY = "og-esports-club-v2";
 const SESSION_KEY = "og-esports-session-v2";
 const TOKEN_KEY = "og-esports-token-v2";
 const PREF_KEY = "og-esports-preferences-v2";
-const APP_VERSION = "8.5 Omega";
+const APP_VERSION = "10.0 Alpha";
+const MATCHES_PER_PAGE = 10;
 
 const IMPORTED_RECORDS = Array.isArray(window.IMPORTED_TRAINING_RECORDS)
   ? window.IMPORTED_TRAINING_RECORDS
@@ -48,7 +49,7 @@ const INITIAL_DATA = {
 const TEXT = {
   zh: {
     appName: "OG电子竞技数据服务中心",
-    loginSubtitle: "以统一身份识别码进入俱乐部内部系统，录入训练数据、查看排名、管理赛季、公告、成员与荣誉。",
+    loginSubtitle: "V10.0 Alpha    ©OJiPC Gaming",
     login: "登录数据中心",
     identityCode: "统一身份识别码",
     password: "密码",
@@ -110,7 +111,7 @@ const TEXT = {
   },
   en: {
     appName: "OG Esports Data Center",
-    loginSubtitle: "Sign in with the unified identity code to record practice data, review rankings, manage seasons, announcements, members, and honors.",
+    loginSubtitle: "V10.0 Alpha    ©OJiPC Gaming",
     login: "Sign In",
     identityCode: "Identity Code",
     password: "Password",
@@ -212,6 +213,7 @@ const tabs = {
   medalUser: session || "00",
   teamUser: session || "00",
   matchMember: "",
+  matchPage: 1,
   teamGroup: "active",
   countRankExpanded: false,
   trainingSeason: "",
@@ -757,12 +759,16 @@ function renderMatches() {
     .sort((a, b) => {
     return `${b.date}-${b.endTime || ""}`.localeCompare(`${a.date}-${a.endTime || ""}`);
   });
+  const totalPages = Math.max(1, Math.ceil(matches.length / MATCHES_PER_PAGE));
+  tabs.matchPage = Math.min(Math.max(Number(tabs.matchPage) || 1, 1), totalPages);
+  const pageStart = (tabs.matchPage - 1) * MATCHES_PER_PAGE;
+  const pageMatches = matches.slice(pageStart, pageStart + MATCHES_PER_PAGE);
   const admin = isAdmin();
-  const visibleMatchIds = matches.map((match) => match.id || match.matchId).filter(Boolean);
+  const visibleMatchIds = pageMatches.map((match) => match.id || match.matchId).filter(Boolean);
   const selectedVisibleCount = visibleMatchIds.filter((id) => selectedMatchIds.has(id)).length;
   const allVisibleSelected = visibleMatchIds.length > 0 && selectedVisibleCount === visibleMatchIds.length;
   const rows = matches.length
-    ? matches.map((match) => renderMatchCard(match)).join("")
+    ? pageMatches.map((match) => renderMatchCard(match)).join("")
     : `<div class="empty">${selectedMember ? `暂无包含 ${escapeHtml(selectedMember.gameId)} 的对局记录。` : "暂无对局记录。请先给成员填写 5E 个人主页链接，然后点击一键同步。"}</div>`;
   return `
     <div class="section">
@@ -805,7 +811,31 @@ function renderMatches() {
         </div>
       </div>
       <div class="match-grid">${rows}</div>
+      ${matches.length ? renderMatchPagination(tabs.matchPage, totalPages) : ""}
     </div>
+  `;
+}
+
+function renderMatchPagination(currentPage, totalPages) {
+  const pages = [];
+  const candidates = new Set([1, totalPages]);
+  for (let page = currentPage - 2; page <= currentPage + 2; page += 1) {
+    if (page >= 1 && page <= totalPages) candidates.add(page);
+  }
+  const sortedPages = [...candidates].sort((a, b) => a - b);
+  let previous = 0;
+  for (const page of sortedPages) {
+    if (previous && page - previous > 1) pages.push(`<span class="match-page-gap" aria-hidden="true">…</span>`);
+    pages.push(`<button class="match-page-button ${page === currentPage ? "active" : ""}" data-action="match-page" data-page="${page}" ${page === currentPage ? "aria-current=\"page\"" : ""}>${page}</button>`);
+    previous = page;
+  }
+  return `
+    <nav class="match-pagination" aria-label="对局记录分页">
+      <button class="match-page-button match-page-step" data-action="match-page" data-page="${currentPage - 1}" ${currentPage === 1 ? "disabled" : ""}>上一页</button>
+      <div class="match-page-list">${pages.join("")}</div>
+      <button class="match-page-button match-page-step" data-action="match-page" data-page="${currentPage + 1}" ${currentPage === totalPages ? "disabled" : ""}>下一页</button>
+      <span class="match-page-summary">第 ${currentPage} / ${totalPages} 页</span>
+    </nav>
   `;
 }
 
@@ -2116,6 +2146,10 @@ document.addEventListener("click", async (event) => {
   }
   if (action === "sync-all-matches") await syncAllMatches();
   if (action === "sync-recent-matches") await syncRecentMatches();
+  if (action === "match-page") {
+    tabs.matchPage = Number(button.dataset.page) || 1;
+    render();
+  }
   if (action === "resync-match") await resyncMatch(button.dataset.id);
   if (action === "delete-selected-matches") await deleteSelectedMatches();
   if (action === "open-match-detail") await openMatchDetail(button.dataset.id);
@@ -2170,6 +2204,7 @@ document.addEventListener("change", (event) => {
   }
   if (target.dataset.action === "pick-match-member") {
     tabs.matchMember = target.value;
+    tabs.matchPage = 1;
     render();
   }
   if (target.dataset.action === "toggle-match-select") {
@@ -2587,6 +2622,7 @@ async function syncMatchCatalog({ syncMode = "all" } = {}) {
     }
 
     data = normalizeData(data);
+    tabs.matchPage = 1;
     syncStatus = "";
     stopBusyTask(false);
     const pending = (data.matchRecords || []).filter((match) => !matchHasCompleteDetails(match)).length;
