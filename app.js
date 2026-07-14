@@ -2,7 +2,7 @@ const STORE_KEY = "og-esports-club-v2";
 const SESSION_KEY = "og-esports-session-v2";
 const TOKEN_KEY = "og-esports-token-v2";
 const PREF_KEY = "og-esports-preferences-v2";
-const APP_VERSION = "8.0";
+const APP_VERSION = "8.1";
 
 const IMPORTED_RECORDS = Array.isArray(window.IMPORTED_TRAINING_RECORDS)
   ? window.IMPORTED_TRAINING_RECORDS
@@ -743,6 +743,7 @@ function renderMatchCard(match) {
   const members = match.recognizedMemberCodes || [];
   const season = data.seasons.find((item) => item.id === match.seasonId);
   const outcome = matchOutcome(match);
+  const admin = isAdmin();
   return `
     <article class="panel match-card ${outcome.className}">
       <div class="panel-body">
@@ -762,6 +763,7 @@ function renderMatchCard(match) {
             ${match.isTrainingCandidate ? `<span class="mini-badge">赛训候选</span>` : ""}
             ${match.isTrainingConfirmed ? `<span class="mini-badge">已确认赛训</span>` : ""}
             <button class="ghost" data-action="open-match-detail" data-id="${escapeHtml(match.id || match.matchId)}">查看详情</button>
+            ${admin ? `<button class="danger" data-action="delete-synced-match" data-id="${escapeHtml(match.id || match.matchId)}">删除对局</button>` : ""}
           </div>
         </div>
         <div class="match-scoreboard">
@@ -2068,6 +2070,7 @@ document.addEventListener("click", async (event) => {
     if (season) await promoteTraining(null, season);
   }
   if (action === "sync-all-matches") await syncAllMatches();
+  if (action === "delete-synced-match") await deleteSyncedMatch(button.dataset.id);
   if (action === "open-match-detail") {
     selectedMatchId = button.dataset.id;
     selectedMatchScope = "full";
@@ -2470,6 +2473,33 @@ async function syncAllMatches() {
     syncStatus = error.message;
     stopBusyTask(false);
     alert(`对局同步失败：${error.message}`);
+  }
+  render();
+}
+
+async function deleteSyncedMatch(id) {
+  const user = currentUser();
+  if (!isAdmin(user)) return alert("只有拥有全体管理权限的用户可以删除已同步对局。");
+  const match = (data.matchRecords || []).find((item) => item.id === id || item.matchId === id);
+  if (!match) return alert("没有找到要删除的对局。");
+  const label = `${match.mapName || match.map || "5E 对局"} · ${match.date || ""} · ${match.matchId || ""}`;
+  if (!confirm(`确定删除这场已同步对局吗？\n${label}\n\n该操作会同时删除这场对局生成的 5E 同步记录，并从统计中移除。`)) return;
+  syncStatus = "正在删除已同步对局...";
+  render();
+  try {
+    const body = await api("/api/delete-match", {
+      method: "POST",
+      body: JSON.stringify({ matchId: match.matchId || "", id: match.id || "" }),
+    });
+    data = normalizeData(body.state);
+    if (selectedMatchId === id || selectedMatchId === match.id || selectedMatchId === match.matchId) {
+      selectedMatchId = "";
+      selectedMatchScope = "full";
+    }
+    syncStatus = `已删除 1 场对局，清理 ${body.removedRecords || 0} 条同步记录`;
+  } catch (error) {
+    syncStatus = error.message;
+    alert(`删除对局失败：${error.message}`);
   }
   render();
 }

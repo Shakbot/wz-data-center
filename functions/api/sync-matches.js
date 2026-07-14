@@ -802,7 +802,7 @@ export async function onRequestPost({ request, env }) {
     await writeState(env.DB, state);
     return json({
       ok: true,
-      syncVersion: "8.0",
+      syncVersion: "8.1",
       seedMembers: seeds.length,
       scannedPages: pages,
       scannedMatches: matchSeeds.size,
