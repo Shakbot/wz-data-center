@@ -45,6 +45,7 @@ body[data-color-theme="azure"] {
   --accent-rgb: 22, 143, 255;
   --accent-rgb-soft: 100, 210, 255;
   --accent-rgb-deep: 52, 115, 255;
+  --line-strong: rgba(22, 143, 255, 0.38);
   --accent-status-text: #9bdcff;
   --accent-status-border: rgba(75, 181, 255, 0.44);
   --accent-status-surface: rgba(22, 143, 255, 0.12);
