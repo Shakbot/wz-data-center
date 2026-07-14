@@ -36,6 +36,49 @@ async function persistAndCompactMatchDetails(db, state) {
   }
 }
 
+function sameValue(a, b) {
+  return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+}
+
+function hasOnlySelfServiceProfileChanges(previous, next) {
+  if (!previous || !next) return false;
+  const editableFields = new Set([
+    "avatar",
+    "fiveEProfileUrl",
+    "fiveEDomain",
+    "fiveEUuid",
+    "fiveEAliases",
+    "fiveELastSyncAt",
+  ]);
+  const keys = new Set([...Object.keys(previous), ...Object.keys(next)]);
+  for (const key of keys) {
+    if (editableFields.has(key)) continue;
+    if (!sameValue(previous[key], next[key])) return false;
+  }
+  return true;
+}
+
+function hasOnlyAllowedUserChanges(previousUsers = [], nextUsers = [], identityCode = "") {
+  if (!Array.isArray(previousUsers) || !Array.isArray(nextUsers)) return false;
+  if (previousUsers.length !== nextUsers.length) return false;
+
+  const previousByCode = new Map(previousUsers.map((user) => [String(user.identityCode || ""), user]));
+  const seenCodes = new Set();
+  for (const nextUser of nextUsers) {
+    const code = String(nextUser?.identityCode || "");
+    if (!code || seenCodes.has(code)) return false;
+    seenCodes.add(code);
+    const previousUser = previousByCode.get(code);
+    if (!previousUser) return false;
+    if (code === identityCode) {
+      if (!hasOnlySelfServiceProfileChanges(previousUser, nextUser)) return false;
+    } else if (!sameValue(previousUser, nextUser)) {
+      return false;
+    }
+  }
+  return seenCodes.has(identityCode) && seenCodes.size === previousByCode.size;
+}
+
 export async function onRequestGet({ request, env }) {
   try {
     if (!env.DB) return json({ error: "D1 数据库没有绑定到 DB。" }, 500);
@@ -66,9 +109,8 @@ export async function onRequestPut({ request, env }) {
     const body = await request.json().catch(() => ({}));
     if (!body.state) return json({ error: "缺少要保存的数据。" }, 400);
 
-    const nextActor = body.state.users?.find((item) => item.identityCode === session.identity_code);
-    if (!isAdmin(actor) && JSON.stringify(nextActor) !== JSON.stringify(actor)) {
-      return json({ error: "普通成员不能修改自己的身份或权限信息。" }, 403);
+    if (!isAdmin(actor) && !hasOnlyAllowedUserChanges(state?.users, body.state.users, session.identity_code)) {
+      return json({ error: "普通成员不能修改自己的账号密码、身份或权限信息。" }, 403);
     }
 
     await persistAndCompactMatchDetails(env.DB, body.state);

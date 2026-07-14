@@ -1809,7 +1809,7 @@ function renderUsers(user) {
             </div>
             <div class="grid two">
               <div class="field"><label>上传头像</label><input name="avatar" type="file" accept="image/*" /></div>
-              <div class="field"><label>新密码</label><input name="password" type="password" placeholder="留空则不修改" /></div>
+              ${admin ? `<div class="field"><label>新密码</label><input name="password" type="password" placeholder="留空则不修改" /></div>` : ""}
               <div class="field"><label>${t("name")}</label><input name="name" value="${escapeHtml(member.name)}" ${admin ? "" : "disabled"} /></div>
               <div class="field"><label>ID</label><input name="gameId" value="${escapeHtml(member.gameId)}" ${admin ? "" : "disabled"} /></div>
               <div class="field"><label>5E 个人主页链接</label><input name="fiveEProfileUrl" value="${escapeHtml(member.fiveEProfileUrl || member.fiveEDomain || "")}" placeholder="粘贴 5E 分享主页完整链接" /></div>
@@ -2475,7 +2475,7 @@ async function handleProfile(form) {
   if (!member || (!isAdmin(user) && member.identityCode !== user.identityCode)) return;
   const formData = new FormData(form);
   const password = String(formData.get("password") || "");
-  if (password) member.password = password;
+  if (isAdmin(user) && password) member.password = password;
   if (isAdmin(user)) {
     member.name = String(formData.get("name")).trim();
     member.gameId = String(formData.get("gameId")).trim();
