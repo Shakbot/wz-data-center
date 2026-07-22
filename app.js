@@ -2,7 +2,7 @@ const STORE_KEY = "og-esports-club-v2";
 const SESSION_KEY = "og-esports-session-v2";
 const TOKEN_KEY = "og-esports-token-v2";
 const PREF_KEY = "og-esports-preferences-v2";
-const APP_VERSION = "10.0 Alpha";
+const APP_VERSION = "10.1 Beta";
 const MATCHES_PER_PAGE = 10;
 
 const IMPORTED_RECORDS = Array.isArray(window.IMPORTED_TRAINING_RECORDS)
@@ -34,6 +34,7 @@ const INITIAL_DATA = {
   records: IMPORTED_RECORDS,
   matchRecords: [],
   medals: [],
+  medalAnnouncements: [],
   networkLinks: [],
   announcements: [
     {
@@ -49,7 +50,7 @@ const INITIAL_DATA = {
 const TEXT = {
   zh: {
     appName: "OG电子竞技数据服务中心",
-    loginSubtitle: "V10.0 Alpha    ©OJiPC Gaming",
+    loginSubtitle: "V10.1 Beta    ©OJiPC Gaming",
     login: "登录数据中心",
     identityCode: "统一身份识别码",
     password: "密码",
@@ -111,7 +112,7 @@ const TEXT = {
   },
   en: {
     appName: "OG Esports Data Center",
-    loginSubtitle: "V10.0 Alpha    ©OJiPC Gaming",
+    loginSubtitle: "V10.1 Beta    ©OJiPC Gaming",
     login: "Sign In",
     identityCode: "Identity Code",
     password: "Password",
@@ -211,6 +212,7 @@ const tabs = {
   adr: "history",
   manageUser: session || "00",
   medalUser: session || "00",
+  medalAnnouncementUser: session || "00",
   teamUser: session || "00",
   matchMember: "",
   matchPage: 1,
@@ -292,8 +294,17 @@ function normalizeData(next) {
   if (bao) bao.gameId = "OG_NKcell";
   if (tang) tang.gameId = "OG_Tang";
   next.networkLinks = Array.isArray(next.networkLinks) ? next.networkLinks : [];
-  next.announcements = (next.announcements || []).map((item) => ({ readBy: [], ...item }));
+  next.announcements = (next.announcements || []).map((item) => ({ readBy: [], pinned: false, ...item }));
+  const pinnedAnnouncements = next.announcements
+    .filter((item) => item.pinned)
+    .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+  if (pinnedAnnouncements.length > 1) {
+    next.announcements.forEach((item) => {
+      item.pinned = item.id === pinnedAnnouncements[0].id;
+    });
+  }
   next.medals = (next.medals || []).map((item, index) => ({ order: index + 1, memberOrder: index + 1, ...item }));
+  next.medalAnnouncements = Array.isArray(next.medalAnnouncements) ? next.medalAnnouncements : [];
   for (const user of next.users) {
     user.fiveEAliases = Array.isArray(user.fiveEAliases)
       ? user.fiveEAliases
@@ -459,13 +470,20 @@ function dateValue(date) {
   return new Date(`${date}T00:00:00`).getTime();
 }
 
+function sortedSeasons() {
+  return [...data.seasons].sort((a, b) =>
+    dateValue(a.end) - dateValue(b.end)
+    || dateValue(a.start) - dateValue(b.start)
+    || String(a.name || "").localeCompare(String(b.name || ""), "zh-CN"));
+}
+
 function findSeasonForDate(date) {
   const stamp = dateValue(date);
-  return data.seasons.find((season) => dateValue(season.start) <= stamp && stamp <= dateValue(season.end)) || null;
+  return sortedSeasons().find((season) => dateValue(season.start) <= stamp && stamp <= dateValue(season.end)) || null;
 }
 
 function getCurrentSeason() {
-  return findSeasonForDate(todayText()) || data.seasons.at(-1) || null;
+  return findSeasonForDate(todayText()) || sortedSeasons().at(-1) || null;
 }
 
 function formatDateTime(iso) {
@@ -1552,8 +1570,9 @@ function renderRecords(user) {
 }
 
 function selectedTrainingSeason() {
-  if (!tabs.trainingSeason) tabs.trainingSeason = getCurrentSeason()?.id || data.seasons[0]?.id || "";
-  return data.seasons.find((season) => season.id === tabs.trainingSeason) || getCurrentSeason() || data.seasons[0] || null;
+  const seasons = sortedSeasons();
+  if (!tabs.trainingSeason) tabs.trainingSeason = getCurrentSeason()?.id || seasons[0]?.id || "";
+  return data.seasons.find((season) => season.id === tabs.trainingSeason) || getCurrentSeason() || seasons[0] || null;
 }
 
 function trainingRecordsForSeason(user, season) {
@@ -1566,7 +1585,7 @@ function trainingRecordsForSeason(user, season) {
 }
 
 function renderSeasonWorkspaceHeader(admin, season) {
-  const buttons = data.seasons.map((item) => `
+  const buttons = sortedSeasons().map((item) => `
     <button class="season-choice ${season?.id === item.id ? "active" : ""}" data-action="pick-training-season" data-id="${escapeHtml(item.id)}" type="button">
       <strong>${escapeHtml(item.name)}</strong>
       <span>${escapeHtml(item.shortName)} · ${escapeHtml(item.start)} 至 ${escapeHtml(item.end)}</span>
@@ -1713,8 +1732,7 @@ function renderSeasonSettingsPanel(compact = false) {
   return `
     <div class="${compact ? "season-settings-inline" : "panel"}">
       <div class="panel-head">
-        <h3>新增 / 调整赛季</h3>
-        <button class="danger" data-action="restore-initial-training" type="button">恢复初始训练数据</button>
+        <h3>建立新赛季</h3>
       </div>
       <div class="${compact ? "" : "panel-body"}">
         <form class="form-grid" data-form="season">
@@ -1741,7 +1759,7 @@ function renderSeasonTable() {
     <table>
       <thead><tr><th>名称</th><th>简称</th><th>开始</th><th>结束</th><th>操作</th></tr></thead>
       <tbody>
-        ${data.seasons
+        ${sortedSeasons()
           .map(
             (season) => `
           <tr>
@@ -1901,6 +1919,7 @@ function renderMedals(user) {
   const member = userByCode(selectedCode) || user;
   return `
     <div class="section">
+      ${renderMedalAnnouncements(admin)}
       ${admin ? renderMemberPicker("medalUser", selectedCode) : ""}
       <div class="panel">
         <div class="panel-head"><h3>${escapeHtml(member.gameId)} · ${t("medals")}</h3><span class="chip">${escapeHtml(member.name)} · ${escapeHtml(member.role)}</span></div>
@@ -1914,7 +1933,14 @@ function renderMedals(user) {
                 <form class="form-grid" data-form="medal" data-code="${member.identityCode}">
                   <div class="grid two">
                     <div class="field"><label>勋章文字</label><input name="text" required /></div>
-                    <div class="field"><label>等级</label><select name="level"><option value="gold">金</option><option value="silver">银</option><option value="bronze">铜</option></select></div>
+                    <div class="field">
+                      <label>等级</label>
+                      <div class="medal-level-picker" role="radiogroup" aria-label="勋章等级">
+                        ${renderMedalLevelOption("gold", "金色", true)}
+                        ${renderMedalLevelOption("silver", "银色")}
+                        ${renderMedalLevelOption("bronze", "铜色")}
+                      </div>
+                    </div>
                   </div>
                   <button class="primary" type="submit">${t("grantMedal")}</button>
                 </form>
@@ -1922,6 +1948,80 @@ function renderMedals(user) {
             </div>`
           : ""
       }
+    </div>
+  `;
+}
+
+function renderMedalLevelOption(level, label, checked = false) {
+  return `
+    <label class="medal-level-option ${level}" title="${label}">
+      <input type="radio" name="level" value="${level}" aria-label="${label}" ${checked ? "checked" : ""} />
+      <span aria-hidden="true"></span>
+    </label>
+  `;
+}
+
+function renderMedalAnnouncements(admin) {
+  const preferredCode = userByCode(tabs.medalAnnouncementUser)?.identityCode || data.users[0]?.identityCode || "";
+  const recipientMedals = data.medals.filter((medal) => medal.userIdentityCode === preferredCode);
+  const items = (data.medalAnnouncements || [])
+    .slice()
+    .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
+    .map((item) => {
+      const recipient = userByCode(item.userIdentityCode);
+      const author = userByCode(item.createdBy);
+      const medal = data.medals.find((candidate) => candidate.id === item.medalId);
+      const medalText = item.medalText || medal?.text || "已授予勋章";
+      const medalLevel = item.medalLevel || medal?.level || "gold";
+      return `
+        <article class="medal-announcement">
+          <div class="medal-announcement-main">
+            ${recipient ? avatarMarkup(recipient, "small") : ""}
+            <div>
+              <div class="medal-announcement-title">
+                <strong>${escapeHtml(recipient?.gameId || item.userIdentityCode)}</strong>
+                <span class="medal ${escapeHtml(medalLevel)}">${escapeHtml(medalText)}</span>
+              </div>
+              <p>${escapeHtml(item.body || "").replaceAll("\n", "<br>")}</p>
+              <div class="date-line">${formatDateTime(item.createdAt)} · ${escapeHtml(author?.gameId || item.createdBy || "")}</div>
+            </div>
+          </div>
+          ${admin ? `<button class="danger" data-action="delete-medal-announcement" data-id="${escapeHtml(item.id)}" type="button">${t("delete")}</button>` : ""}
+        </article>
+      `;
+    })
+    .join("");
+
+  const editor = admin ? `
+    <form class="form-grid medal-announcement-form" data-form="medal-announcement">
+      <div class="grid two">
+        <div class="field">
+          <label>接受勋章的用户</label>
+          <select name="userIdentityCode" data-action="pick-medal-announcement-user" required>
+            ${data.users.map((member) => `<option value="${escapeHtml(member.identityCode)}" ${member.identityCode === preferredCode ? "selected" : ""}>${escapeHtml(member.gameId)} · ${escapeHtml(member.name)}</option>`).join("")}
+          </select>
+        </div>
+        <div class="field">
+          <label>授予的勋章</label>
+          <select name="medalId" ${recipientMedals.length ? "required" : "disabled"}>
+            ${recipientMedals.length
+              ? recipientMedals.map((medal) => `<option value="${escapeHtml(medal.id)}">${escapeHtml(medal.text)}</option>`).join("")
+              : `<option value="">该用户暂无可选勋章</option>`}
+          </select>
+        </div>
+      </div>
+      <div class="field"><label>具体说明</label><textarea name="body" required></textarea></div>
+      <button class="primary" type="submit" ${recipientMedals.length ? "" : "disabled"}>发布勋章授予公告</button>
+    </form>
+  ` : "";
+
+  return `
+    <div class="panel medal-announcement-panel">
+      <div class="panel-head"><h3>勋章授予公告</h3><span class="chip">${(data.medalAnnouncements || []).length} 条</span></div>
+      <div class="panel-body">
+        ${editor}
+        <div class="medal-announcement-list">${items || `<div class="empty">暂无勋章授予公告。</div>`}</div>
+      </div>
     </div>
   `;
 }
@@ -2015,20 +2115,23 @@ function renderAnnouncementList(admin, viewer = currentUser()) {
   if (!data.announcements.length) return `<div class="empty">${t("emptyData")}</div>`;
   return data.announcements
     .slice()
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || b.createdAt.localeCompare(a.createdAt))
     .map((item) => {
       const author = userByCode(item.createdBy);
       const readBy = item.readBy || [];
       const isRead = viewer ? readBy.includes(viewer.identityCode) : false;
       const unreadUsers = data.users.filter((user) => !readBy.includes(user.identityCode));
       return `
-        <article class="announcement">
+        <article class="announcement ${item.pinned ? "is-pinned" : ""}">
           <div class="panel-head" style="padding:0 0 8px;border:0">
             <div>
-              <h4>${escapeHtml(item.title)}</h4>
+              <h4>${item.pinned ? `<span class="pinned-badge">置顶</span>` : ""}${escapeHtml(item.title)}</h4>
               <div class="date-line">${formatDateTime(item.createdAt)} · ${author ? escapeHtml(author.gameId) : escapeHtml(item.createdBy)}</div>
             </div>
-            ${admin ? `<button class="danger" data-action="delete-announcement" data-id="${item.id}">${t("delete")}</button>` : ""}
+            ${admin ? `<div class="inline-actions">
+              <button class="ghost" data-action="pin-announcement" data-id="${escapeHtml(item.id)}" type="button" ${item.pinned ? "disabled" : ""}>${item.pinned ? "已置顶" : "置顶"}</button>
+              <button class="danger" data-action="delete-announcement" data-id="${escapeHtml(item.id)}" type="button">${t("delete")}</button>
+            </div>` : ""}
           </div>
           <p>${escapeHtml(item.body).replaceAll("\n", "<br>")}</p>
           <label class="checkline announcement-read">
@@ -2055,6 +2158,7 @@ document.addEventListener("submit", async (event) => {
   if (name === "profile") await handleProfile(form);
   if (name === "fivee-link") await handleFiveELink(form);
   if (name === "medal") await handleMedal(form);
+  if (name === "medal-announcement") await handleMedalAnnouncement(form);
   if (name === "announcement") await handleAnnouncement(form);
   if (name === "network-link") await handleNetworkLink(form);
 });
@@ -2183,9 +2287,10 @@ document.addEventListener("click", async (event) => {
   if (action === "delete-selected-records") await deleteSelectedRecords();
   if (action === "save-season") await saveSeason(button.dataset.id);
   if (action === "delete-season") await deleteSeason(button.dataset.id);
-  if (action === "restore-initial-training") await restoreInitialTrainingData();
   if (action === "delete-medal") deleteMedal(button.dataset.id);
+  if (action === "delete-medal-announcement") await deleteMedalAnnouncement(button.dataset.id);
   if (action === "delete-announcement") deleteAnnouncement(button.dataset.id);
+  if (action === "pin-announcement") await pinAnnouncement(button.dataset.id);
   if (action === "delete-network-link") deleteNetworkLink(button.dataset.id);
   if (action === "sync-5e") await sync5e(button.dataset.code);
   if (action === "export-data") exportPlatformData();
@@ -2205,6 +2310,10 @@ document.addEventListener("change", (event) => {
   if (target.dataset.action === "pick-match-member") {
     tabs.matchMember = target.value;
     tabs.matchPage = 1;
+    render();
+  }
+  if (target.dataset.action === "pick-medal-announcement-user") {
+    tabs.medalAnnouncementUser = target.value;
     render();
   }
   if (target.dataset.action === "toggle-match-select") {
@@ -2271,6 +2380,7 @@ async function handleLogin(form) {
   loginBusy = false;
   tabs.manageUser = session;
   tabs.medalUser = session;
+  tabs.medalAnnouncementUser = session;
   tabs.teamUser = session;
   localStorage.setItem(SESSION_KEY, session);
   localStorage.setItem(TOKEN_KEY, authToken);
@@ -2382,23 +2492,8 @@ async function deleteSelectedRecords() {
   render();
 }
 
-async function restoreInitialTrainingData() {
-  const user = currentUser();
-  if (!isAdmin(user)) return alert("只有管理员可以恢复初始训练数据。");
-  if (!confirm("这会删除 2026 年 3 月及之后的训练记录、清空对局记录，并恢复最初两个赛季。成员账号、头像、5E 链接和勋章会保留。确定继续？")) return;
-  const cutoff = dateValue("2026-03-01");
-  data.seasons = structuredClone(INITIAL_DATA.seasons);
-  data.records = structuredClone(IMPORTED_RECORDS).filter((record) => dateValue(record.date) < cutoff);
-  data.matchRecords = [];
-  selectedRecordIds = new Set();
-  tabs.trainingSeason = data.seasons[0]?.id || "";
-  tabs.manualRecordOpen = false;
-  refreshRecordSeasons();
-  await saveData();
-  render();
-}
-
 async function handleSeason(form) {
+  if (!isAdmin()) return alert("只有拥有全体管理权限的用户可以建立赛季。");
   const formData = new FormData(form);
   const start = String(formData.get("start"));
   const end = String(formData.get("end"));
@@ -2418,6 +2513,7 @@ async function handleSeason(form) {
 }
 
 async function saveSeason(id) {
+  if (!isAdmin()) return alert("只有拥有全体管理权限的用户可以修改赛季。");
   const season = data.seasons.find((item) => item.id === id);
   if (!season) return;
   const fields = [...document.querySelectorAll(`[data-season-field][data-id="${CSS.escape(id)}"]`)];
@@ -2430,9 +2526,10 @@ async function saveSeason(id) {
 }
 
 async function deleteSeason(id) {
+  if (!isAdmin()) return alert("只有拥有全体管理权限的用户可以删除赛季。");
   if (!confirm("删除赛季后，相关比赛会变为未归属赛季。确定删除？")) return;
   data.seasons = data.seasons.filter((item) => item.id !== id);
-  if (tabs.trainingSeason === id) tabs.trainingSeason = getCurrentSeason()?.id || data.seasons[0]?.id || "";
+  if (tabs.trainingSeason === id) tabs.trainingSeason = getCurrentSeason()?.id || sortedSeasons()[0]?.id || "";
   refreshRecordSeasons();
   await saveData();
   render();
@@ -2464,6 +2561,7 @@ async function handleRegister(form) {
   view = "users";
   tabs.manageUser = identityCode;
   tabs.medalUser = identityCode;
+  tabs.medalAnnouncementUser = identityCode;
   tabs.teamUser = identityCode;
   render();
 }
@@ -2714,6 +2812,7 @@ function fileToDataUrl(file) {
 }
 
 async function handleMedal(form) {
+  if (!isAdmin()) return alert("只有拥有全体管理权限的用户可以授予勋章。");
   const formData = new FormData(form);
   const ownerMedals = data.medals.filter((item) => item.userIdentityCode === form.dataset.code);
   data.medals.push({
@@ -2731,8 +2830,39 @@ async function handleMedal(form) {
 }
 
 function deleteMedal(id) {
+  if (!isAdmin()) return alert("只有拥有全体管理权限的用户可以删除勋章。");
   data.medals = data.medals.filter((item) => item.id !== id);
   saveData();
+  render();
+}
+
+async function handleMedalAnnouncement(form) {
+  if (!isAdmin()) return alert("只有拥有全体管理权限的用户可以发布勋章授予公告。");
+  const formData = new FormData(form);
+  const userIdentityCode = String(formData.get("userIdentityCode") || "");
+  const medalId = String(formData.get("medalId") || "");
+  const recipient = userByCode(userIdentityCode);
+  const medal = data.medals.find((item) => item.id === medalId && item.userIdentityCode === userIdentityCode);
+  if (!recipient || !medal) return alert("请选择该用户已经获得的勋章。");
+  data.medalAnnouncements.push({
+    id: cryptoId(),
+    userIdentityCode,
+    medalId,
+    medalText: medal.text,
+    medalLevel: medal.level,
+    body: String(formData.get("body") || "").trim(),
+    createdAt: new Date().toISOString(),
+    createdBy: currentUser().identityCode,
+  });
+  await saveData();
+  render();
+}
+
+async function deleteMedalAnnouncement(id) {
+  if (!isAdmin()) return alert("只有拥有全体管理权限的用户可以删除勋章授予公告。");
+  if (!confirm("确定删除这条勋章授予公告吗？")) return;
+  data.medalAnnouncements = data.medalAnnouncements.filter((item) => item.id !== id);
+  await saveData();
   render();
 }
 
@@ -2761,6 +2891,7 @@ function reorderMedal(sourceId, targetId) {
 }
 
 async function handleAnnouncement(form) {
+  if (!isAdmin()) return alert("只有拥有全体管理权限的用户可以发布公告。");
   const formData = new FormData(form);
   data.announcements.push({
     id: cryptoId(),
@@ -2769,14 +2900,27 @@ async function handleAnnouncement(form) {
     createdAt: new Date().toISOString(),
     createdBy: currentUser().identityCode,
     readBy: [],
+    pinned: false,
   });
   await saveData();
   render();
 }
 
 function deleteAnnouncement(id) {
+  if (!isAdmin()) return alert("只有拥有全体管理权限的用户可以删除公告。");
   data.announcements = data.announcements.filter((item) => item.id !== id);
   saveData();
+  render();
+}
+
+async function pinAnnouncement(id) {
+  if (!isAdmin()) return alert("只有拥有全体管理权限的用户可以置顶公告。");
+  const target = data.announcements.find((item) => item.id === id);
+  if (!target) return;
+  data.announcements.forEach((item) => {
+    item.pinned = item.id === id;
+  });
+  await saveData();
   render();
 }
 
@@ -2872,10 +3016,20 @@ function exportPlatformData() {
       ],
     },
     {
+      name: "MedalAnnouncements",
+      rows: [
+        ["公告ID", "接受用户识别码", "接受用户ID", "勋章ID", "勋章文字", "等级", "说明", "发布人", "发布时间"],
+        ...(data.medalAnnouncements || []).map((item) => {
+          const user = userByCode(item.userIdentityCode) || {};
+          return [item.id, item.userIdentityCode, user.gameId || "", item.medalId, item.medalText || "", item.medalLevel || "", item.body || "", item.createdBy || "", item.createdAt || ""];
+        }),
+      ],
+    },
+    {
       name: "Announcements",
       rows: [
-        ["公告ID", "标题", "正文", "发布人", "发布时间", "已读识别码", "未读用户名单"],
-        ...data.announcements.map((item) => [item.id, item.title, item.body, item.createdBy, item.createdAt, (item.readBy || []).join(", "), data.users.filter((user) => !(item.readBy || []).includes(user.identityCode)).map((user) => user.gameId).join(", ")]),
+        ["公告ID", "标题", "正文", "置顶", "发布人", "发布时间", "已读识别码", "未读用户名单"],
+        ...data.announcements.map((item) => [item.id, item.title, item.body, item.pinned ? "是" : "否", item.createdBy, item.createdAt, (item.readBy || []).join(", "), data.users.filter((user) => !(item.readBy || []).includes(user.identityCode)).map((user) => user.gameId).join(", ")]),
       ],
     },
     {

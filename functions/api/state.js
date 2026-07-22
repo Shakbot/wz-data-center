@@ -80,6 +80,66 @@ function hasOnlyAllowedUserChanges(previousUsers = [], nextUsers = [], identityC
   return seenCodes.has(identityCode) && seenCodes.size === previousByCode.size;
 }
 
+function hasOnlyOwnAnnouncementReadChanges(previousItems = [], nextItems = [], identityCode = "") {
+  if (!Array.isArray(previousItems) || !Array.isArray(nextItems) || previousItems.length !== nextItems.length) return false;
+  const previousById = new Map(previousItems.map((item) => [String(item.id || ""), item]));
+  for (const next of nextItems) {
+    const previous = previousById.get(String(next?.id || ""));
+    if (!previous) return false;
+    const previousReadBy = (previous.readBy || []).filter((code) => code !== identityCode).sort();
+    const nextReadBy = (next.readBy || []).filter((code) => code !== identityCode).sort();
+    if (!sameValue(previousReadBy, nextReadBy)) return false;
+    const { readBy: previousReads, ...previousContent } = previous;
+    const { readBy: nextReads, ...nextContent } = next;
+    if (!sameValue({ pinned: false, ...previousContent }, { pinned: false, ...nextContent })) return false;
+  }
+  return true;
+}
+
+function hasOnlyOwnMedalOrderChanges(previousItems = [], nextItems = [], identityCode = "") {
+  if (!Array.isArray(previousItems) || !Array.isArray(nextItems) || previousItems.length !== nextItems.length) return false;
+  const previousById = new Map(previousItems.map((item) => [String(item.id || ""), item]));
+  for (const next of nextItems) {
+    const previous = previousById.get(String(next?.id || ""));
+    if (!previous) return false;
+    if (previous.userIdentityCode !== identityCode) {
+      if (!sameValue(previous, next)) return false;
+      continue;
+    }
+    const { order: previousOrder, memberOrder: previousMemberOrder, ...previousContent } = previous;
+    const { order: nextOrder, memberOrder: nextMemberOrder, ...nextContent } = next;
+    if (!sameValue(previousContent, nextContent)) return false;
+  }
+  return true;
+}
+
+function hasOnlyOwnRecordChanges(previousItems = [], nextItems = [], identityCode = "") {
+  if (!Array.isArray(previousItems) || !Array.isArray(nextItems)) return false;
+  const previousById = new Map(previousItems.map((item) => [String(item.id || ""), item]));
+  const nextById = new Map(nextItems.map((item) => [String(item.id || ""), item]));
+  if (previousById.size !== previousItems.length || nextById.size !== nextItems.length) return false;
+  for (const previous of previousItems) {
+    if (previous.userIdentityCode === identityCode) continue;
+    if (!sameValue(previous, nextById.get(String(previous.id || "")))) return false;
+  }
+  for (const next of nextItems) {
+    const previous = previousById.get(String(next.id || ""));
+    if (next.userIdentityCode !== identityCode && !sameValue(previous, next)) return false;
+  }
+  return true;
+}
+
+function hasOnlyAllowedNonAdminChanges(previousState, nextState, identityCode) {
+  return hasOnlyAllowedUserChanges(previousState?.users, nextState?.users, identityCode)
+    && sameValue(previousState?.seasons || [], nextState?.seasons || [])
+    && sameValue(previousState?.matchRecords || [], nextState?.matchRecords || [])
+    && sameValue(previousState?.medalAnnouncements || [], nextState?.medalAnnouncements || [])
+    && sameValue(previousState?.networkLinks || [], nextState?.networkLinks || [])
+    && hasOnlyOwnRecordChanges(previousState?.records || [], nextState?.records || [], identityCode)
+    && hasOnlyOwnMedalOrderChanges(previousState?.medals || [], nextState?.medals || [], identityCode)
+    && hasOnlyOwnAnnouncementReadChanges(previousState?.announcements || [], nextState?.announcements || [], identityCode);
+}
+
 export async function onRequestGet({ request, env }) {
   try {
     if (!env.DB) return json({ error: "D1 数据库没有绑定到 DB。" }, 500);
@@ -106,12 +166,13 @@ export async function onRequestPut({ request, env }) {
     if (!session) return json({ error: "请重新登录。" }, 401);
 
     const state = await readState(env.DB);
+    mergeCatalog(state, await readMatchCatalog(env.DB));
     const actor = state?.users?.find((item) => item.identityCode === session.identity_code);
     const body = await request.json().catch(() => ({}));
     if (!body.state) return json({ error: "缺少要保存的数据。" }, 400);
 
-    if (!isAdmin(actor) && !hasOnlyAllowedUserChanges(state?.users, body.state.users, session.identity_code)) {
-      return json({ error: "普通成员只能修改自己的密码、头像和 5E 资料。" }, 403);
+    if (!isAdmin(actor) && !hasOnlyAllowedNonAdminChanges(state, body.state, session.identity_code)) {
+      return json({ error: "普通成员只能修改自己的资料与训练记录，并标记公告已读。" }, 403);
     }
 
     await persistAndCompactMatchDetails(env.DB, body.state);
