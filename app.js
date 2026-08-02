@@ -2,7 +2,7 @@ const STORE_KEY = "og-esports-club-v2";
 const SESSION_KEY = "og-esports-session-v2";
 const TOKEN_KEY = "og-esports-token-v2";
 const PREF_KEY = "og-esports-preferences-v2";
-const APP_VERSION = "10.2";
+const APP_VERSION = "10.3";
 const MATCHES_PER_PAGE = 10;
 const TRAINING_RECORDS_PER_PAGE = 10;
 
@@ -51,7 +51,7 @@ const INITIAL_DATA = {
 const TEXT = {
   zh: {
     appName: "OG电子竞技数据服务中心",
-    loginSubtitle: "V10.2    ©OJiPC Gaming",
+    loginSubtitle: "V10.3    ©OJiPC Gaming",
     login: "登录数据中心",
     identityCode: "统一身份识别码",
     password: "密码",
@@ -113,7 +113,7 @@ const TEXT = {
   },
   en: {
     appName: "OG Esports Data Center",
-    loginSubtitle: "V10.2    ©OJiPC Gaming",
+    loginSubtitle: "V10.3    ©OJiPC Gaming",
     login: "Sign In",
     identityCode: "Identity Code",
     password: "Password",

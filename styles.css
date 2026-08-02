@@ -2983,107 +2983,324 @@ body::after {
   opacity: 0.07;
 }
 
-/* Global TargetCursor, adapted from the supplied React Bits interaction. */
-body.target-cursor-enabled,
-body.target-cursor-enabled * {
-  cursor: none !important;
+/* V10.3: theme-aware Aurora, SplashCursor, glass layers, and SpecularButton behavior. */
+:root {
+  --radius: 14px;
+  --control-radius: 10px;
+  --glass-panel: rgba(13, 13, 16, 0.58);
+  --glass-panel-strong: rgba(16, 16, 20, 0.72);
+  --glass-control: rgba(255, 255, 255, 0.055);
+  --glass-highlight: rgba(255, 255, 255, 0.1);
+  --glass-shadow: 0 18px 58px rgba(0, 0, 0, 0.3);
 }
 
-.target-cursor-wrapper {
+body[data-color-theme="azure"] {
+  --glass-panel: rgba(7, 15, 25, 0.56);
+  --glass-panel-strong: rgba(7, 18, 31, 0.72);
+  --glass-control: rgba(35, 135, 220, 0.075);
+  --glass-highlight: rgba(118, 218, 255, 0.12);
+}
+
+body {
+  position: relative;
+  overflow-x: hidden;
+  background: #050506;
+}
+
+body::before,
+body::after {
+  display: none;
+}
+
+.global-motion-layer {
   position: fixed;
-  top: 0;
-  left: 0;
-  z-index: 9999;
-  width: 0;
-  height: 0;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
   pointer-events: none;
-  color: #ffffff;
-  opacity: 0;
-  transform: translate3d(50vw, 50vh, 0);
-  transition: color 0.16s ease, opacity 0.16s ease, scale 0.18s ease;
-  will-change: transform;
+  background:
+    linear-gradient(180deg, rgba(2, 2, 4, 0.08), rgba(3, 3, 5, 0.72)),
+    radial-gradient(circle at 50% 15%, rgba(var(--accent-rgb), 0.1), transparent 48%);
 }
 
-.target-cursor-wrapper.is-visible {
-  opacity: 1;
-}
-
-.target-cursor-wrapper.is-targeting {
-  color: var(--orange-2);
-}
-
-.target-cursor-wrapper.is-pressed {
-  scale: 0.88;
-}
-
-.target-cursor-frame {
+.aurora-background,
+.splash-cursor-canvas {
   position: absolute;
   inset: 0;
-  will-change: transform;
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 
-.target-cursor-dot {
+.aurora-background {
+  opacity: 0.96;
+  transform: scale(1.08);
+}
+
+.splash-cursor-canvas {
+  opacity: 0.92;
+  mix-blend-mode: screen;
+}
+
+.app-shell {
+  position: relative;
+  z-index: 1;
+  background: transparent;
+}
+
+.workspace,
+.content,
+.section {
+  background: transparent;
+}
+
+.sidebar,
+.login-panel {
+  background: rgba(7, 7, 10, 0.48);
+  border-color: rgba(255, 255, 255, 0.1);
+  -webkit-backdrop-filter: blur(28px) saturate(1.35);
+  backdrop-filter: blur(28px) saturate(1.35);
+}
+
+.panel,
+.login-box,
+.busy-dialog,
+.network-card,
+.summary-card,
+.member-card,
+.count-podium-card,
+.rank-row,
+.season-choice,
+.match-control,
+.match-result-badge,
+.chip,
+.empty {
+  border-color: rgba(255, 255, 255, 0.11);
+  background:
+    linear-gradient(145deg, var(--glass-highlight), transparent 34%),
+    var(--glass-panel);
+  -webkit-backdrop-filter: blur(20px) saturate(1.32);
+  backdrop-filter: blur(20px) saturate(1.32);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.055), var(--glass-shadow);
+}
+
+.panel,
+.login-box,
+.busy-dialog,
+.network-card,
+.summary-card,
+.member-card,
+.count-podium-card,
+.season-choice {
+  border-radius: var(--radius);
+}
+
+.panel-head {
+  background: rgba(255, 255, 255, 0.018);
+  border-color: rgba(255, 255, 255, 0.085);
+}
+
+.panel-body,
+.match-card .panel-body {
+  background: transparent;
+}
+
+.match-card {
+  background:
+    linear-gradient(120deg, rgba(var(--accent-rgb), 0.055), transparent 42%),
+    var(--glass-panel);
+}
+
+.match-scoreboard {
+  border-color: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.018);
+}
+
+.login-panel {
+  border-left: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.login-box {
+  background:
+    linear-gradient(145deg, rgba(var(--accent-rgb), 0.1), transparent 38%),
+    var(--glass-panel-strong);
+}
+
+input,
+select,
+textarea,
+.tabs button,
+.chip-button,
+.match-page-button,
+.toggle-control,
+.match-select-all,
+.checkline {
+  border-radius: var(--control-radius);
+  border-color: rgba(255, 255, 255, 0.11);
+  background: var(--glass-control);
+  -webkit-backdrop-filter: blur(12px) saturate(1.2);
+  backdrop-filter: blur(12px) saturate(1.2);
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  background: rgba(var(--accent-rgb), 0.075);
+}
+
+.primary,
+.ghost,
+.danger,
+.icon-button,
+.match-control-action,
+.nav button,
+.tabs button,
+.chip-button,
+.match-page-button,
+.toggle-control {
+  border-radius: var(--control-radius);
+  -webkit-backdrop-filter: blur(13px) saturate(1.25);
+  backdrop-filter: blur(13px) saturate(1.25);
+}
+
+.primary {
+  color: #0c0c0e;
+  border: 1px solid rgba(var(--accent-rgb-soft), 0.5);
+  background: linear-gradient(135deg, rgba(var(--accent-rgb), 0.9), rgba(var(--accent-rgb-soft), 0.76));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.32), 0 10px 30px rgba(var(--accent-rgb), 0.16);
+}
+
+.ghost,
+.icon-button,
+.match-control-action,
+.nav button,
+.chip-button,
+.match-page-button,
+.toggle-control {
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.danger {
+  background: rgba(255, 79, 66, 0.12);
+}
+
+.specular-control {
+  --specular-x: 50%;
+  --specular-y: 50%;
+  --specular-opacity: 0.16;
+  position: relative;
+  isolation: isolate;
+  outline: none;
+  transition: transform 0.16s ease, border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+}
+
+.specular-control::before {
+  content: "";
   position: absolute;
-  left: 0;
-  top: 0;
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: currentColor;
-  box-shadow: 0 0 12px currentColor;
-  transform: translate(-50%, -50%);
-  transition: transform 0.18s ease, background 0.16s ease;
+  inset: -1px;
+  z-index: 3;
+  padding: 1px;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: var(--specular-opacity);
+  background:
+    radial-gradient(90px circle at var(--specular-x) var(--specular-y), rgba(255, 255, 255, 0.98), rgba(var(--accent-rgb-soft), 0.78) 34%, transparent 72%),
+    linear-gradient(120deg, rgba(255, 255, 255, 0.22), transparent 36%, rgba(var(--accent-rgb), 0.34));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  transition: opacity 0.2s ease;
 }
 
-.target-cursor-wrapper.is-pressed .target-cursor-dot {
-  transform: translate(-50%, -50%) scale(0.7);
+.specular-control:hover:not(:disabled) {
+  border-color: rgba(var(--accent-rgb-soft), 0.5);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 12px 34px rgba(var(--accent-rgb), 0.12);
+  transform: translateY(-2px);
 }
 
-.target-cursor-corner {
-  position: absolute;
-  left: 0;
-  top: 0;
-  width: 12px;
-  height: 12px;
-  border: 3px solid currentColor;
-  filter: drop-shadow(0 0 5px rgba(var(--accent-rgb), 0.42));
-  will-change: transform;
+.specular-control:active:not(:disabled) {
+  transform: translateY(0) scale(0.97);
 }
 
-.target-cursor-corner.corner-tl {
-  border-right: 0;
-  border-bottom: 0;
+.specular-control:focus-visible {
+  outline: 2px solid rgba(var(--accent-rgb-soft), 0.9);
+  outline-offset: 3px;
 }
 
-.target-cursor-corner.corner-tr {
-  border-left: 0;
-  border-bottom: 0;
+.primary::after {
+  display: none;
 }
 
-.target-cursor-corner.corner-br {
-  border-left: 0;
-  border-top: 0;
+.motion-surface-enter {
+  animation: glass-surface-in 0.48s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
-.target-cursor-corner.corner-bl {
-  border-right: 0;
-  border-top: 0;
+.sidebar-medals {
+  display: flex;
+  width: 100%;
+  justify-content: center;
+}
+
+.sidebar-medals > .medal-list {
+  width: 100%;
+  justify-content: center;
+}
+
+.sidebar-medals .medal,
+.sidebar-medals .medal-empty {
+  justify-content: center;
+  text-align: center;
+}
+
+table {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+th {
+  background: rgba(var(--accent-rgb), 0.07);
+}
+
+tbody tr {
+  background: rgba(255, 255, 255, 0.012);
+  transition: background 0.18s ease;
+}
+
+tbody tr:hover {
+  background: rgba(var(--accent-rgb), 0.055);
+}
+
+@keyframes glass-surface-in {
+  from { opacity: 0; transform: translateY(12px) scale(0.992); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@media (max-width: 960px) {
+  .sidebar {
+    background: rgba(7, 7, 10, 0.78);
+  }
+
+  .aurora-background {
+    opacity: 0.82;
+  }
 }
 
 @media (hover: none), (pointer: coarse) {
-  body.target-cursor-enabled,
-  body.target-cursor-enabled * {
-    cursor: auto !important;
+  .splash-cursor-canvas {
+    display: none;
   }
 
-  .target-cursor-wrapper {
-    display: none;
+  .specular-control::before {
+    opacity: 0.2;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .target-cursor-wrapper,
-  .target-cursor-dot {
-    transition-duration: 0.001ms;
+  .splash-cursor-canvas {
+    display: none;
+  }
+
+  .motion-surface-enter {
+    animation: none;
   }
 }

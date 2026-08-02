@@ -1,7 +1,7 @@
 import { ensureSchema, isAdmin, json, readMatchCatalog, readState, readSyncContext, userFromRequest, writeMatchCatalog, writeMatchDetail, writeState, writeSyncContext } from "./_utils.js";
 
 const FIVE_E_BASE = "https://ya-api-app.5eplay.com";
-const SYNC_VERSION = "10.2";
+const SYNC_VERSION = "10.3";
 const SYNC_ROLES = new Set([
   "总教练",
   "常务副总教练",
