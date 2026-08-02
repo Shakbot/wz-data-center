@@ -1,11 +1,18 @@
 (() => {
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   const coarsePointer = window.matchMedia("(pointer: coarse)").matches;
-  const palettes = {
+  const fallbackPalettes = {
     orange: ["#ff7a18", "#ffbe63", "#ff5433"],
     azure: ["#168fff", "#72dcff", "#345cff"],
   };
-  let palette = palettes[document.body.dataset.colorTheme === "azure" ? "azure" : "orange"];
+  function readThemePalette() {
+    const styles = getComputedStyle(document.documentElement);
+    const colors = ["--orange", "--orange-2", "--accent-rgb-deep"]
+      .map((property) => styles.getPropertyValue(property).trim().toLowerCase());
+    if (colors.every((color) => /^#[0-9a-f]{6}$/.test(color))) return colors;
+    return fallbackPalettes[document.body.dataset.colorTheme === "azure" ? "azure" : "orange"];
+  }
+  let palette = readThemePalette();
 
   const layer = document.createElement("div");
   layer.className = "global-motion-layer";
@@ -201,7 +208,7 @@
   if (app) appObserver.observe(app, { childList: true, subtree: true });
 
   const themeObserver = new MutationObserver(() => {
-    palette = palettes[document.body.dataset.colorTheme === "azure" ? "azure" : "orange"];
+    palette = readThemePalette();
   });
   themeObserver.observe(document.body, { attributes: true, attributeFilter: ["data-color-theme"] });
 

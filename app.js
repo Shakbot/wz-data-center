@@ -2,7 +2,7 @@ const STORE_KEY = "og-esports-club-v2";
 const SESSION_KEY = "og-esports-session-v2";
 const TOKEN_KEY = "og-esports-token-v2";
 const PREF_KEY = "og-esports-preferences-v2";
-const APP_VERSION = "10.3";
+const APP_VERSION = "11.0 Color";
 const MATCHES_PER_PAGE = 10;
 const TRAINING_RECORDS_PER_PAGE = 10;
 
@@ -51,7 +51,7 @@ const INITIAL_DATA = {
 const TEXT = {
   zh: {
     appName: "OG电子竞技数据服务中心",
-    loginSubtitle: "V10.3    ©OJiPC Gaming",
+    loginSubtitle: "V11.0 Color    ©OJiPC Gaming",
     login: "登录数据中心",
     identityCode: "统一身份识别码",
     password: "密码",
@@ -113,7 +113,7 @@ const TEXT = {
   },
   en: {
     appName: "OG Esports Data Center",
-    loginSubtitle: "V10.3    ©OJiPC Gaming",
+    loginSubtitle: "V11.0 Color    ©OJiPC Gaming",
     login: "Sign In",
     identityCode: "Identity Code",
     password: "Password",
@@ -225,6 +225,7 @@ const tabs = {
   autoTrainingOpen: false,
   seasonSettingsOpen: false,
   fiveEAdminOpen: false,
+  colorMenuOpen: false,
   radarScope: "history",
   radarSeason: "",
 };
@@ -243,14 +244,17 @@ function t(key) {
 function loadPreferences() {
   try {
     const saved = JSON.parse(localStorage.getItem(PREF_KEY) || "{}");
+    const colorTheme = ["azure", "custom"].includes(saved.colorTheme) ? saved.colorTheme : "orange";
     return {
       ...saved,
       lang: saved.lang || "zh",
       theme: "dark",
-      colorTheme: saved.colorTheme === "azure" ? "azure" : "orange",
+      colorTheme,
+      customAccent: normalizeHexColor(saved.customAccent, "#8b5cf6"),
+      sidebarCollapsed: Boolean(saved.sidebarCollapsed),
     };
   } catch {
-    return { lang: "zh", theme: "dark", colorTheme: "orange" };
+    return { lang: "zh", theme: "dark", colorTheme: "orange", customAccent: "#8b5cf6", sidebarCollapsed: false };
   }
 }
 
@@ -260,8 +264,88 @@ function savePreferences() {
 
 function applyTheme() {
   document.body.dataset.theme = "dark";
-  document.body.dataset.colorTheme = preferences.colorTheme === "azure" ? "azure" : "orange";
+  const mode = ["azure", "custom"].includes(preferences.colorTheme) ? preferences.colorTheme : "orange";
+  if (mode === "custom") applyCustomTheme(preferences.customAccent);
+  else clearCustomTheme();
+  document.body.dataset.colorTheme = mode;
   document.documentElement.lang = preferences.lang === "zh" ? "zh-CN" : "en";
+}
+
+const CUSTOM_THEME_PROPERTIES = [
+  "--orange", "--orange-2", "--accent-rgb", "--accent-rgb-soft", "--accent-rgb-deep",
+  "--line-strong", "--accent-status-text", "--accent-status-border", "--accent-status-surface",
+  "--accent-notice-surface", "--accent-hot-start", "--accent-hot-end", "--accent-hot-border",
+  "--accent-muted-surface", "--accent-muted-border", "--accent-rank-low-start", "--accent-rank-low-end",
+  "--accent-rank-low-border", "--bg-mid", "--bg-end", "--glass-panel", "--glass-panel-strong",
+  "--glass-control", "--glass-highlight",
+];
+
+function normalizeHexColor(value, fallback = "#ff7a18") {
+  const color = String(value || "").trim();
+  return /^#[0-9a-f]{6}$/i.test(color) ? color.toLowerCase() : fallback;
+}
+
+function hexRgb(color) {
+  const value = Number.parseInt(normalizeHexColor(color).slice(1), 16);
+  return [(value >> 16) & 255, (value >> 8) & 255, value & 255];
+}
+
+function rgbHex(rgb) {
+  return `#${rgb.map((value) => Math.max(0, Math.min(255, Math.round(value))).toString(16).padStart(2, "0")).join("")}`;
+}
+
+function mixHex(color, target, ratio) {
+  const sourceRgb = hexRgb(color);
+  const targetRgb = hexRgb(target);
+  return rgbHex(sourceRgb.map((value, index) => value + (targetRgb[index] - value) * ratio));
+}
+
+function applyCustomTheme(value) {
+  const root = document.documentElement.style;
+  const base = normalizeHexColor(value, "#8b5cf6");
+  const soft = mixHex(base, "#ffffff", 0.38);
+  const deep = mixHex(base, "#111827", 0.3);
+  const lowStart = mixHex(base, "#111217", 0.62);
+  const lowEnd = mixHex(base, "#050507", 0.82);
+  const panel = mixHex(base, "#07070a", 0.84);
+  const panelStrong = mixHex(base, "#08080c", 0.78);
+  const [r, g, b] = hexRgb(base);
+  const [sr, sg, sb] = hexRgb(soft);
+  const [dr, dg, db] = hexRgb(deep);
+  const [pr, pg, pb] = hexRgb(panel);
+  const [psr, psg, psb] = hexRgb(panelStrong);
+  const values = {
+    "--orange": base,
+    "--orange-2": soft,
+    "--accent-rgb": `${r}, ${g}, ${b}`,
+    "--accent-rgb-soft": `${sr}, ${sg}, ${sb}`,
+    "--accent-rgb-deep": `${dr}, ${dg}, ${db}`,
+    "--line-strong": `rgba(${r}, ${g}, ${b}, 0.42)`,
+    "--accent-status-text": soft,
+    "--accent-status-border": `rgba(${r}, ${g}, ${b}, 0.46)`,
+    "--accent-status-surface": `rgba(${r}, ${g}, ${b}, 0.12)`,
+    "--accent-notice-surface": `rgba(${r}, ${g}, ${b}, 0.09)`,
+    "--accent-hot-start": soft,
+    "--accent-hot-end": base,
+    "--accent-hot-border": `rgba(${sr}, ${sg}, ${sb}, 0.76)`,
+    "--accent-muted-surface": `rgba(${r}, ${g}, ${b}, 0.2)`,
+    "--accent-muted-border": `rgba(${r}, ${g}, ${b}, 0.44)`,
+    "--accent-rank-low-start": lowStart,
+    "--accent-rank-low-end": lowEnd,
+    "--accent-rank-low-border": `rgba(${r}, ${g}, ${b}, 0.64)`,
+    "--bg-mid": mixHex(base, "#08080b", 0.86),
+    "--bg-end": mixHex(base, "#030305", 0.93),
+    "--glass-panel": `rgba(${pr}, ${pg}, ${pb}, 0.58)`,
+    "--glass-panel-strong": `rgba(${psr}, ${psg}, ${psb}, 0.72)`,
+    "--glass-control": `rgba(${r}, ${g}, ${b}, 0.075)`,
+    "--glass-highlight": `rgba(${sr}, ${sg}, ${sb}, 0.13)`,
+  };
+  Object.entries(values).forEach(([property, propertyValue]) => root.setProperty(property, propertyValue));
+}
+
+function clearCustomTheme() {
+  const root = document.documentElement.style;
+  CUSTOM_THEME_PROPERTIES.forEach((property) => root.removeProperty(property));
 }
 
 async function api(path, options = {}) {
@@ -594,8 +678,7 @@ function render() {
   }
   const user = currentUser();
   if (!user) {
-    document.body.dataset.theme = "dark";
-    document.body.dataset.colorTheme = "orange";
+    applyTheme();
     document.body.dataset.login = "true";
     renderLogin();
     return;
@@ -604,8 +687,11 @@ function render() {
   applyTheme();
 
   app.innerHTML = `
-    <div class="workspace">
-      <aside class="sidebar ${sidebarOpen ? "open" : ""}">
+    <div class="workspace ${preferences.sidebarCollapsed ? "sidebar-collapsed" : ""}">
+      <aside class="sidebar ${sidebarOpen ? "open" : ""} ${preferences.sidebarCollapsed ? "collapsed" : ""}">
+        <button class="sidebar-collapse-button" data-action="toggle-sidebar-collapse" type="button" aria-label="${preferences.sidebarCollapsed ? "展开侧栏" : "收起侧栏"}" title="${preferences.sidebarCollapsed ? "展开侧栏" : "收起侧栏"}">
+          ${navIcon(preferences.sidebarCollapsed ? "expand" : "collapse")}
+        </button>
         <div class="user-card sidebar-profile">
           ${avatarMarkup(user)}
           <div>
@@ -629,9 +715,8 @@ function render() {
           ${navButton("network", "network", t("network"))}
         </nav>
         <div class="sidebar-footer">
-          ${toggleControl("toggle-color-theme", t("themeSwitch"), preferences.colorTheme === "azure" ? t("dark") : t("theme"), "theme", preferences.colorTheme === "azure")}
           <button class="ghost export-button" data-action="export-data">${navIcon("records")}<span>${t("exportData")}</span></button>
-          <button class="danger" data-action="logout">${t("logout")}</button>
+          <button class="danger sidebar-logout" data-action="logout">${navIcon("logout")}<span>${t("logout")}</span></button>
         </div>
       </aside>
       <section class="content">
@@ -650,7 +735,7 @@ function render() {
           </div>
           <div class="top-actions">
             ${syncStatus ? `<span class="sync-error">${escapeHtml(syncStatus)}</span>` : ""}
-            ${toggleControl("toggle-color-theme", t("themeSwitch"), preferences.colorTheme === "azure" ? t("dark") : t("theme"), "theme", preferences.colorTheme === "azure")}
+            ${renderColorStylePicker()}
           </div>
         </div>
         ${renderView(user)}
@@ -682,6 +767,10 @@ function navIcon(icon) {
     select: '<path d="M5 4h14v16H5V4Zm3.5 8 2.3 2.3L16 9"/>',
     refresh: '<path d="M20 7v5h-5M4 17v-5h5M18.5 12a7 7 0 0 0-12-4.5L4 10m16 4-2.5 2.5A7 7 0 0 1 5.5 12"/>',
     view: '<path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"/><circle cx="12" cy="12" r="2.5"/>',
+    palette: '<path d="M12 3a9 9 0 1 0 0 18h1.4a2.1 2.1 0 0 0 0-4.2h-.8a1.8 1.8 0 0 1 0-3.6H16A5 5 0 0 0 21 8c0-2.8-4-5-9-5Z"/><circle cx="7.5" cy="10" r=".8"/><circle cx="9.2" cy="6.8" r=".8"/><circle cx="13.5" cy="6.3" r=".8"/><circle cx="17" cy="8.5" r=".8"/>',
+    collapse: '<path d="M15 5 8 12l7 7"/>',
+    expand: '<path d="m9 5 7 7-7 7"/>',
+    logout: '<path d="M10 4H5v16h5M14 8l4 4-4 4m4-4H9"/>',
   };
   return `<svg class="nav-svg" viewBox="0 0 24 24" aria-hidden="true">${paths[icon] || paths.dashboard}</svg>`;
 }
@@ -836,6 +925,40 @@ function renderMatches() {
       </div>
       <div class="match-grid">${rows}</div>
       ${matches.length ? renderMatchPagination(tabs.matchPage, totalPages) : ""}
+    </div>
+  `;
+}
+
+function renderColorStylePicker() {
+  const mode = ["azure", "custom"].includes(preferences.colorTheme) ? preferences.colorTheme : "orange";
+  const modeLabel = mode === "azure" ? t("dark") : mode === "custom" ? "自定义" : t("theme");
+  const customColor = normalizeHexColor(preferences.customAccent, "#8b5cf6");
+  return `
+    <div class="color-style-picker">
+      <button class="color-style-trigger" data-action="toggle-color-menu" type="button" aria-haspopup="dialog" aria-expanded="${tabs.colorMenuOpen}">
+        ${navIcon("palette")}
+        <span>${t("themeSwitch")}</span>
+        <strong>${escapeHtml(modeLabel)}</strong>
+        <span class="color-style-preview ${mode}" style="${mode === "custom" ? `--preview-color:${customColor}` : ""}"></span>
+      </button>
+      ${tabs.colorMenuOpen ? `
+        <div class="color-style-popover" role="dialog" aria-label="${t("themeSwitch")}">
+          <div class="color-style-popover-head">
+            <strong>${t("themeSwitch")}</strong>
+            <span>全局主题</span>
+          </div>
+          <button class="color-style-option ${mode === "orange" ? "active" : ""}" data-action="set-color-theme" data-theme="orange" type="button">
+            <span class="color-option-swatch orange"></span><span>橙金</span>${mode === "orange" ? "<b>当前</b>" : ""}
+          </button>
+          <button class="color-style-option ${mode === "azure" ? "active" : ""}" data-action="set-color-theme" data-theme="azure" type="button">
+            <span class="color-option-swatch azure"></span><span>蔚蓝</span>${mode === "azure" ? "<b>当前</b>" : ""}
+          </button>
+          <label class="color-style-option color-custom-option ${mode === "custom" ? "active" : ""}">
+            <input class="custom-color-input" data-action="pick-custom-color" type="color" value="${customColor}" aria-label="自定义主题颜色" />
+            <span>自定义颜色</span><code>${customColor.toUpperCase()}</code>
+          </label>
+        </div>
+      ` : ""}
     </div>
   `;
 }
@@ -2189,7 +2312,13 @@ document.addEventListener("submit", async (event) => {
 
 document.addEventListener("click", async (event) => {
   const button = event.target.closest("[data-action]");
-  if (!button) return;
+  if (!button) {
+    if (tabs.colorMenuOpen && !event.target.closest(".color-style-picker")) {
+      tabs.colorMenuOpen = false;
+      render();
+    }
+    return;
+  }
   const action = button.dataset.action;
   if (action === "nav") {
     view = button.dataset.view;
@@ -2201,6 +2330,11 @@ document.addEventListener("click", async (event) => {
     sidebarOpen = !sidebarOpen;
     render();
   }
+  if (action === "toggle-sidebar-collapse") {
+    preferences.sidebarCollapsed = !preferences.sidebarCollapsed;
+    savePreferences();
+    render();
+  }
   if (action === "logout") {
     api("/api/logout", { method: "POST" }).catch(() => {});
     session = "";
@@ -2209,8 +2343,13 @@ document.addEventListener("click", async (event) => {
     localStorage.removeItem(TOKEN_KEY);
     render();
   }
-  if (action === "toggle-color-theme") {
-    preferences.colorTheme = preferences.colorTheme === "azure" ? "orange" : "azure";
+  if (action === "toggle-color-menu") {
+    tabs.colorMenuOpen = !tabs.colorMenuOpen;
+    render();
+  }
+  if (action === "set-color-theme") {
+    preferences.colorTheme = button.dataset.theme === "azure" ? "azure" : "orange";
+    tabs.colorMenuOpen = false;
     savePreferences();
     render();
   }
@@ -2343,6 +2482,13 @@ document.addEventListener("change", (event) => {
   }
   if (target.dataset.action === "pick-medal-announcement-user") {
     tabs.medalAnnouncementUser = target.value;
+    render();
+  }
+  if (target.dataset.action === "pick-custom-color") {
+    preferences.customAccent = normalizeHexColor(target.value, "#8b5cf6");
+    preferences.colorTheme = "custom";
+    tabs.colorMenuOpen = false;
+    savePreferences();
     render();
   }
   if (target.dataset.action === "toggle-match-select") {
