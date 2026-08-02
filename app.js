@@ -2,8 +2,9 @@ const STORE_KEY = "og-esports-club-v2";
 const SESSION_KEY = "og-esports-session-v2";
 const TOKEN_KEY = "og-esports-token-v2";
 const PREF_KEY = "og-esports-preferences-v2";
-const APP_VERSION = "10.1 Beta";
+const APP_VERSION = "10.2";
 const MATCHES_PER_PAGE = 10;
+const TRAINING_RECORDS_PER_PAGE = 10;
 
 const IMPORTED_RECORDS = Array.isArray(window.IMPORTED_TRAINING_RECORDS)
   ? window.IMPORTED_TRAINING_RECORDS
@@ -50,7 +51,7 @@ const INITIAL_DATA = {
 const TEXT = {
   zh: {
     appName: "OG电子竞技数据服务中心",
-    loginSubtitle: "V10.1 Beta    ©OJiPC Gaming",
+    loginSubtitle: "V10.2    ©OJiPC Gaming",
     login: "登录数据中心",
     identityCode: "统一身份识别码",
     password: "密码",
@@ -112,7 +113,7 @@ const TEXT = {
   },
   en: {
     appName: "OG Esports Data Center",
-    loginSubtitle: "V10.1 Beta    ©OJiPC Gaming",
+    loginSubtitle: "V10.2    ©OJiPC Gaming",
     login: "Sign In",
     identityCode: "Identity Code",
     password: "Password",
@@ -216,6 +217,7 @@ const tabs = {
   teamUser: session || "00",
   matchMember: "",
   matchPage: 1,
+  trainingRecordPage: 1,
   teamGroup: "active",
   countRankExpanded: false,
   trainingSeason: "",
@@ -676,6 +678,10 @@ function navIcon(icon) {
     medals: '<path d="M8 3h8l-2 6H10L8 3Zm2 6 2 3 2-3m-2 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z"/>',
     announcements: '<path d="M4 10v4h4l8 4V6L8 10H4Zm12 0 4-3v10l-4-3"/>',
     network: '<path d="M7 7a3 3 0 1 0 0.1 0M17 7a3 3 0 1 0 0.1 0M12 17a3 3 0 1 0 0.1 0M9.5 8.3l5 0M8.7 9.5l2.4 5M15.3 9.5l-2.4 5"/>',
+    status: '<circle cx="12" cy="12" r="9"/><path d="m8 12 2.5 2.5L16.5 9"/>',
+    select: '<path d="M5 4h14v16H5V4Zm3.5 8 2.3 2.3L16 9"/>',
+    refresh: '<path d="M20 7v5h-5M4 17v-5h5M18.5 12a7 7 0 0 0-12-4.5L4 10m16 4-2.5 2.5A7 7 0 0 1 5.5 12"/>',
+    view: '<path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"/><circle cx="12" cy="12" r="2.5"/>',
   };
   return `<svg class="nav-svg" viewBox="0 0 24 24" aria-hidden="true">${paths[icon] || paths.dashboard}</svg>`;
 }
@@ -835,6 +841,14 @@ function renderMatches() {
 }
 
 function renderMatchPagination(currentPage, totalPages) {
+  return renderPagination(currentPage, totalPages, "match-page", "对局记录分页");
+}
+
+function renderTrainingPagination(currentPage, totalPages) {
+  return renderPagination(currentPage, totalPages, "training-record-page", "赛训记录分页");
+}
+
+function renderPagination(currentPage, totalPages, action, ariaLabel) {
   const pages = [];
   const candidates = new Set([1, totalPages]);
   for (let page = currentPage - 2; page <= currentPage + 2; page += 1) {
@@ -844,14 +858,14 @@ function renderMatchPagination(currentPage, totalPages) {
   let previous = 0;
   for (const page of sortedPages) {
     if (previous && page - previous > 1) pages.push(`<span class="match-page-gap" aria-hidden="true">…</span>`);
-    pages.push(`<button class="match-page-button ${page === currentPage ? "active" : ""}" data-action="match-page" data-page="${page}" ${page === currentPage ? "aria-current=\"page\"" : ""}>${page}</button>`);
+    pages.push(`<button class="match-page-button ${page === currentPage ? "active" : ""}" data-action="${action}" data-page="${page}" ${page === currentPage ? "aria-current=\"page\"" : ""}>${page}</button>`);
     previous = page;
   }
   return `
-    <nav class="match-pagination" aria-label="对局记录分页">
-      <button class="match-page-button match-page-step" data-action="match-page" data-page="${currentPage - 1}" ${currentPage === 1 ? "disabled" : ""}>上一页</button>
+    <nav class="match-pagination" aria-label="${ariaLabel}">
+      <button class="match-page-button match-page-step" data-action="${action}" data-page="${currentPage - 1}" ${currentPage === 1 ? "disabled" : ""}>上一页</button>
       <div class="match-page-list">${pages.join("")}</div>
-      <button class="match-page-button match-page-step" data-action="match-page" data-page="${currentPage + 1}" ${currentPage === totalPages ? "disabled" : ""}>下一页</button>
+      <button class="match-page-button match-page-step" data-action="${action}" data-page="${currentPage + 1}" ${currentPage === totalPages ? "disabled" : ""}>下一页</button>
       <span class="match-page-summary">第 ${currentPage} / ${totalPages} 页</span>
     </nav>
   `;
@@ -878,19 +892,21 @@ function renderMatchCard(match) {
               return member ? `<span class="member-pill">${avatarMarkup(member, "tiny")}<span>${escapeHtml(member.gameId)}</span></span>` : "";
             }).join("") : `<span class="date-line">未识别到俱乐部成员</span>`}
           </div>
-          <div class="inline-actions">
-            <span class="chip">${members.length} 名成员</span>
-            <span class="match-detail-status ${detailComplete ? "complete" : "pending"}">${detailComplete ? "已完善" : "待完善"}</span>
+          ${match.isTrainingCandidate || match.isTrainingConfirmed ? `<div class="match-flags">
             ${match.isTrainingCandidate ? `<span class="mini-badge">赛训候选</span>` : ""}
             ${match.isTrainingConfirmed ? `<span class="mini-badge">已确认赛训</span>` : ""}
+          </div>` : ""}
+          <div class="match-control-row">
+            <span class="match-control match-control-members">${navIcon("team")}<span>成员数</span><strong>${members.length}</strong></span>
+            <span class="match-control match-detail-status ${detailComplete ? "complete" : "pending"}">${navIcon("status")}<span>完善状态</span><strong>${detailComplete ? "已完善" : "待完善"}</strong></span>
             ${admin && matchKey ? `
-              <label class="match-select-control">
+              <label class="match-control match-select-control">
                 <input type="checkbox" data-action="toggle-match-select" data-id="${escapeHtml(matchKey)}" ${selectedMatchIds.has(matchKey) ? "checked" : ""} />
-                <span>选择</span>
+                ${navIcon("select")}<span>选择</span>
               </label>
             ` : ""}
-            ${match.matchId ? `<button class="ghost" data-action="resync-match" data-id="${escapeHtml(match.matchId)}">再同步</button>` : ""}
-            <button class="ghost" data-action="open-match-detail" data-id="${escapeHtml(match.id || match.matchId)}">查看详情</button>
+            ${match.matchId ? `<button class="match-control match-control-action" data-action="resync-match" data-id="${escapeHtml(match.matchId)}" type="button">${navIcon("refresh")}<span>再同步</span></button>` : ""}
+            <button class="match-control match-control-action" data-action="open-match-detail" data-id="${escapeHtml(match.id || match.matchId)}" type="button">${navIcon("view")}<span>查看详情</span></button>
           </div>
         </div>
         <div class="match-scoreboard">
@@ -1554,6 +1570,11 @@ function renderRecords(user) {
   const admin = isAdmin(user);
   const season = selectedTrainingSeason();
   const visibleRecords = trainingRecordsForSeason(user, season);
+  const sortedRecords = [...visibleRecords].sort(compareRecordDesc);
+  const totalPages = Math.max(1, Math.ceil(sortedRecords.length / TRAINING_RECORDS_PER_PAGE));
+  tabs.trainingRecordPage = Math.min(Math.max(Number(tabs.trainingRecordPage) || 1, 1), totalPages);
+  const pageStart = (tabs.trainingRecordPage - 1) * TRAINING_RECORDS_PER_PAGE;
+  const pageRecords = sortedRecords.slice(pageStart, pageStart + TRAINING_RECORDS_PER_PAGE);
   return `
     <div class="section">
       ${renderSeasonWorkspaceHeader(admin, season)}
@@ -1563,7 +1584,10 @@ function renderRecords(user) {
       </div>
       <div class="panel">
         <div class="panel-head"><h3>${season ? `${season.name} · 赛训记录` : (admin ? t("allRecords") : t("myRecords"))}</h3><span class="chip">${visibleRecords.length} 条</span></div>
-        <div class="panel-body table-wrap">${renderRecordsTable(visibleRecords, true, user)}</div>
+        <div class="panel-body">
+          <div class="table-wrap">${renderRecordsTable(pageRecords, true, user)}</div>
+          ${visibleRecords.length ? renderTrainingPagination(tabs.trainingRecordPage, totalPages) : ""}
+        </div>
       </div>
     </div>
   `;
@@ -2225,6 +2249,7 @@ document.addEventListener("click", async (event) => {
   }
   if (action === "pick-training-season") {
     tabs.trainingSeason = button.dataset.id;
+    tabs.trainingRecordPage = 1;
     selectedRecordIds = new Set();
     render();
   }
@@ -2252,6 +2277,10 @@ document.addEventListener("click", async (event) => {
   if (action === "sync-recent-matches") await syncRecentMatches();
   if (action === "match-page") {
     tabs.matchPage = Number(button.dataset.page) || 1;
+    render();
+  }
+  if (action === "training-record-page") {
+    tabs.trainingRecordPage = Number(button.dataset.page) || 1;
     render();
   }
   if (action === "resync-match") await resyncMatch(button.dataset.id);
@@ -2408,6 +2437,7 @@ async function handleRecord(form) {
     createdBy: user.identityCode,
     createdAt: new Date().toISOString(),
   });
+  tabs.trainingRecordPage = 1;
   await saveData();
   render();
 }
@@ -2436,6 +2466,7 @@ async function promoteTraining(form, seasonOverride = null) {
       }),
     });
     data = normalizeData(body.state);
+    tabs.trainingRecordPage = 1;
     syncStatus = "";
     stopBusyTask(false);
     alert(`赛训自动填报完成：找到 ${body.promotedMatches} 场共同对局，标记 ${body.promotedRecords} 条成员记录。`);
