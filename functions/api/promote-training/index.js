@@ -4,25 +4,9 @@ function dateValue(date) {
   return new Date(`${date}T00:00:00`).getTime();
 }
 
-function todayText() {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function findSeasonForDate(state, date) {
-  const stamp = dateValue(date);
-  return state.seasons.find((season) => dateValue(season.start) <= stamp && stamp <= dateValue(season.end)) || null;
-}
-
 function isTrainingEligible(state, code) {
   const user = state.users.find((item) => item.identityCode === code);
-  return !!user && user.role !== "观察员";
-}
-
-function normalizeRange(body) {
-  const season = body.seasonId ? body.state?.seasons?.find((item) => item.id === body.seasonId) : null;
-  const end = String(body.end || season?.end || todayText());
-  const start = String(body.start || season?.start || end);
-  return dateValue(start) <= dateValue(end) ? { start, end } : { start: end, end: start };
+  return !!user;
 }
 
 export async function onRequestPost({ request, env }) {
@@ -40,16 +24,18 @@ export async function onRequestPost({ request, env }) {
     if (!isAdmin(actor)) return json({ error: "只有管理员可以自动填报赛训记录。" }, 403);
 
     const body = await request.json().catch(() => ({}));
-    body.state = state;
-    const range = normalizeRange(body);
-    const selectedSeason = body.seasonId ? state.seasons.find((season) => season.id === body.seasonId) : null;
-    const minMembers = Math.max(3, Number(body.minMembers || 3));
+    const selectedSeason = state.seasons.find((season) => season.id === body.seasonId);
+    if (!selectedSeason) return json({ error: "请先选择有效赛季。" }, 400);
+    const range = { start: selectedSeason.start, end: selectedSeason.end };
     const startStamp = dateValue(range.start);
     const endStamp = dateValue(range.end);
     const matches = (state.matchRecords || []).filter((match) => {
       const stamp = dateValue(match.date);
-      const members = new Set((match.recognizedMemberCodes || []).filter((code) => isTrainingEligible(state, code)));
-      return stamp >= startStamp && stamp <= endStamp && members.size >= minMembers;
+      return stamp >= startStamp && stamp <= endStamp
+        && match.isTrainingCandidate === true
+        && match.detailStatus === "complete"
+        && Boolean(match.hasSideDetails || ((match.ctPlayers || []).length && (match.tPlayers || []).length))
+        && Number(match.detailPlayerCount || (match.players || []).length) > 0;
     });
 
     const promotedMatches = [];
@@ -60,14 +46,16 @@ export async function onRequestPost({ request, env }) {
       const matchRecordId = match.id || "";
       const matchId = match.matchId || "";
       const records = state.records.filter((record) => {
-        return record.fiveE?.matchRecordId === matchRecordId || record.fiveE?.fingerprint === match.fingerprint || record.fiveE?.matchId === matchId;
+        if (!record.fiveE) return false;
+        return (matchRecordId && record.fiveE.matchRecordId === matchRecordId)
+          || (match.fingerprint && record.fiveE.fingerprint === match.fingerprint)
+          || (matchId && record.fiveE.matchId === matchId);
       });
       if (!records.length) continue;
 
       for (const record of records) {
         if (!isTrainingEligible(state, record.userIdentityCode)) continue;
-        const season = selectedSeason || findSeasonForDate(state, record.date);
-        if (season) record.seasonId = season.id;
+        record.seasonId = selectedSeason.id;
         if (!record.trainingIncluded) promotedRecords += 1;
         record.trainingIncluded = true;
         record.trainingMatchId = matchRecordId || matchId;
@@ -86,7 +74,6 @@ export async function onRequestPost({ request, env }) {
     return json({
       ok: true,
       range,
-      minMembers,
       promotedMatches: promotedMatches.length,
       promotedRecords,
       matches: promotedMatches,

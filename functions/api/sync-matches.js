@@ -1,7 +1,8 @@
 import { ensureSchema, isAdmin, json, readMatchCatalog, readState, readSyncContext, userFromRequest, writeMatchCatalog, writeMatchDetail, writeState, writeSyncContext } from "./_utils.js";
+import { candidateForExistingMatch, isTrainingCandidate, trainingDefinition } from "./_training-definition.js";
 
 const FIVE_E_BASE = "https://ya-api-app.5eplay.com";
-const SYNC_VERSION = "11.0 Color";
+const SYNC_VERSION = "12.0 Win";
 const SYNC_ROLES = new Set([
   "总教练",
   "常务副总教练",
@@ -106,11 +107,6 @@ function findSeasonForDate(state, date) {
   });
 }
 
-function isTrainingEligible(state, code) {
-  const user = state.users.find((item) => item.identityCode === code);
-  return !!user && user.role !== "观察员";
-}
-
 function normalizeUserAliases(state) {
   const defaults = {
     "06": ["OG_SilverBullet_ZJ", "OG_SliverBullet_ZJ", "OG_SilverBullet", "OG_SliverBullet"],
@@ -213,7 +209,8 @@ function buildSummaryRecord(state, listItem, seed) {
     recognizedMemberCodes: [seed.user.identityCode],
     discoveredByMemberCodes: [seed.user.identityCode],
     discoveredByDomains: [seed.profile.domain],
-    isTrainingCandidate: false,
+    isTrainingCandidate: isTrainingCandidate(state, [seed.user.identityCode]),
+    trainingDefinitionId: trainingDefinition(state).id,
     isTrainingConfirmed: false,
     players: [],
     ctPlayers: [],
@@ -428,7 +425,6 @@ function buildMatchRecord(state, listItem, detail, indexes, seedUser) {
     listItem.recognizedMemberCodes || [],
     players.filter((player) => player.memberCode).map((player) => player.memberCode),
   );
-  const trainingMemberCodes = recognizedMemberCodes.filter((code) => isTrainingEligible(state, code));
   const group1Score = firstNumber(main, ["group1_all_score", "group1_score", "team1_score", "score1", "a_score"], firstNumber(listItem, ["group1_all_score", "group1_score", "team1_score", "score1", "a_score"]));
   const group2Score = firstNumber(main, ["group2_all_score", "group2_score", "team2_score", "score2", "b_score"], firstNumber(listItem, ["group2_all_score", "group2_score", "team2_score", "score2", "b_score"]));
   const record = {
@@ -444,7 +440,7 @@ function buildMatchRecord(state, listItem, detail, indexes, seedUser) {
     scoreB: group1Score,
     seasonId: season ? season.id : "",
     recognizedMemberCodes,
-    isTrainingCandidate: trainingMemberCodes.length >= 3,
+    isTrainingCandidate: isTrainingCandidate(state, recognizedMemberCodes),
     isTrainingConfirmed: false,
     players,
     ctPlayers,
@@ -595,7 +591,6 @@ function normalizeExistingMatches(state, indexes) {
       return member ? { ...player, memberCode: member.identityCode, isClubMember: true } : player;
     }));
     record.recognizedMemberCodes = [...new Set(record.players.filter((player) => player.memberCode).map((player) => player.memberCode))];
-    record.isTrainingCandidate = record.recognizedMemberCodes.filter((code) => isTrainingEligible(state, code)).length >= 3;
     record.fingerprint = record.fingerprint || matchFingerprint(record);
     record.id = record.id || `match-${record.fingerprint}`;
     const key = record.matchId || record.fingerprint;
@@ -721,6 +716,8 @@ async function syncSingleMatch(state, matchId) {
       next.discoveredByDomains = domains;
       next.syncedFromDomain = domain;
       next.isTrainingConfirmed = Boolean(match.isTrainingConfirmed);
+      next.trainingDefinitionId = match.trainingDefinitionId;
+      next.isTrainingCandidate = candidateForExistingMatch(state, match, next.recognizedMemberCodes);
       Object.assign(match, next);
       replacePersonalRecordsForMatch(state, match, previousMatchKeys);
       normalizeTrainingIncludedRecords(state);
@@ -745,7 +742,7 @@ async function syncCatalogPage(body, env, session) {
     normalizeUserAliases(fullState);
     await writeMatchCatalog(env.DB, (fullState.matchRecords || []).map(summaryForClient));
     await writeSyncContext(env.DB, fullState);
-    state = { users: fullState.users || [], seasons: fullState.seasons || [] };
+    state = { users: fullState.users || [], seasons: fullState.seasons || [], trainingDefinition: fullState.trainingDefinition };
   }
 
   normalizeUserAliases(state);
@@ -828,7 +825,7 @@ async function syncCatalogPage(body, env, session) {
     const existing = existingByMatchId.get(summary.matchId);
     if (existing) {
       mergeSummaryRecord(existing, summary);
-      existing.isTrainingCandidate = existing.recognizedMemberCodes.filter((code) => isTrainingEligible(state, code)).length >= 3;
+      existing.isTrainingCandidate = candidateForExistingMatch(state, existing, existing.recognizedMemberCodes);
       changedMatches.push(summaryForClient(existing));
       merged += 1;
     } else {
@@ -983,7 +980,7 @@ export async function onRequestPost({ request, env }) {
       const existing = existingByMatchId.get(summary.matchId);
       if (existing) {
         mergeSummaryRecord(existing, summary);
-        existing.isTrainingCandidate = existing.recognizedMemberCodes.filter((code) => isTrainingEligible(state, code)).length >= 3;
+        existing.isTrainingCandidate = candidateForExistingMatch(state, existing, existing.recognizedMemberCodes);
         changedMatches.push(summaryForClient(existing));
         merged += 1;
       } else {

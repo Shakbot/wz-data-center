@@ -2,7 +2,7 @@ const STORE_KEY = "og-esports-club-v2";
 const SESSION_KEY = "og-esports-session-v2";
 const TOKEN_KEY = "og-esports-token-v2";
 const PREF_KEY = "og-esports-preferences-v2";
-const APP_VERSION = "11.0 Color";
+const APP_VERSION = "12.0 Win";
 const MATCHES_PER_PAGE = 10;
 const TRAINING_RECORDS_PER_PAGE = 10;
 
@@ -34,6 +34,7 @@ const INITIAL_DATA = {
   ],
   records: IMPORTED_RECORDS,
   matchRecords: [],
+  trainingDefinition: { id: "default-b-3", totalMin: 3, mode: "B", groupMin: 3 },
   medals: [],
   medalAnnouncements: [],
   networkLinks: [],
@@ -51,7 +52,7 @@ const INITIAL_DATA = {
 const TEXT = {
   zh: {
     appName: "OG电子竞技数据服务中心",
-    loginSubtitle: "V11.0 Color    ©OJiPC Gaming",
+    loginSubtitle: "V12.0 Win  ©OJiPC Gaming",
     login: "登录数据中心",
     identityCode: "统一身份识别码",
     password: "密码",
@@ -113,7 +114,7 @@ const TEXT = {
   },
   en: {
     appName: "OG Esports Data Center",
-    loginSubtitle: "V11.0 Color    ©OJiPC Gaming",
+    loginSubtitle: "V12.0 Win  ©OJiPC Gaming",
     login: "Sign In",
     identityCode: "Identity Code",
     password: "Password",
@@ -183,6 +184,7 @@ let sidebarOpen = false;
 let booting = true;
 let syncStatus = "";
 let selectedMatchId = "";
+let selectedAnnouncementId = "";
 let selectedMatchScope = "full";
 let selectedMatchIds = new Set();
 let selectedRecordIds = new Set();
@@ -218,11 +220,11 @@ const tabs = {
   matchMember: "",
   matchPage: 1,
   trainingRecordPage: 1,
-  teamGroup: "active",
+  teamGroup: "core",
   countRankExpanded: false,
   trainingSeason: "",
   manualRecordOpen: false,
-  autoTrainingOpen: false,
+  dashboardCoreOnly: false,
   seasonSettingsOpen: false,
   fiveEAdminOpen: false,
   colorMenuOpen: false,
@@ -244,17 +246,16 @@ function t(key) {
 function loadPreferences() {
   try {
     const saved = JSON.parse(localStorage.getItem(PREF_KEY) || "{}");
-    const colorTheme = ["azure", "custom"].includes(saved.colorTheme) ? saved.colorTheme : "orange";
+    const colorTheme = saved.colorTheme === "azure" ? "azure" : "orange";
     return {
       ...saved,
       lang: saved.lang || "zh",
       theme: "dark",
       colorTheme,
-      customAccent: normalizeHexColor(saved.customAccent, "#8b5cf6"),
       sidebarCollapsed: Boolean(saved.sidebarCollapsed),
     };
   } catch {
-    return { lang: "zh", theme: "dark", colorTheme: "orange", customAccent: "#8b5cf6", sidebarCollapsed: false };
+    return { lang: "zh", theme: "dark", colorTheme: "orange", sidebarCollapsed: false };
   }
 }
 
@@ -264,88 +265,8 @@ function savePreferences() {
 
 function applyTheme() {
   document.body.dataset.theme = "dark";
-  const mode = ["azure", "custom"].includes(preferences.colorTheme) ? preferences.colorTheme : "orange";
-  if (mode === "custom") applyCustomTheme(preferences.customAccent);
-  else clearCustomTheme();
-  document.body.dataset.colorTheme = mode;
+  document.body.dataset.colorTheme = preferences.colorTheme === "azure" ? "azure" : "orange";
   document.documentElement.lang = preferences.lang === "zh" ? "zh-CN" : "en";
-}
-
-const CUSTOM_THEME_PROPERTIES = [
-  "--orange", "--orange-2", "--accent-rgb", "--accent-rgb-soft", "--accent-rgb-deep",
-  "--line-strong", "--accent-status-text", "--accent-status-border", "--accent-status-surface",
-  "--accent-notice-surface", "--accent-hot-start", "--accent-hot-end", "--accent-hot-border",
-  "--accent-muted-surface", "--accent-muted-border", "--accent-rank-low-start", "--accent-rank-low-end",
-  "--accent-rank-low-border", "--bg-mid", "--bg-end", "--glass-panel", "--glass-panel-strong",
-  "--glass-control", "--glass-highlight",
-];
-
-function normalizeHexColor(value, fallback = "#ff7a18") {
-  const color = String(value || "").trim();
-  return /^#[0-9a-f]{6}$/i.test(color) ? color.toLowerCase() : fallback;
-}
-
-function hexRgb(color) {
-  const value = Number.parseInt(normalizeHexColor(color).slice(1), 16);
-  return [(value >> 16) & 255, (value >> 8) & 255, value & 255];
-}
-
-function rgbHex(rgb) {
-  return `#${rgb.map((value) => Math.max(0, Math.min(255, Math.round(value))).toString(16).padStart(2, "0")).join("")}`;
-}
-
-function mixHex(color, target, ratio) {
-  const sourceRgb = hexRgb(color);
-  const targetRgb = hexRgb(target);
-  return rgbHex(sourceRgb.map((value, index) => value + (targetRgb[index] - value) * ratio));
-}
-
-function applyCustomTheme(value) {
-  const root = document.documentElement.style;
-  const base = normalizeHexColor(value, "#8b5cf6");
-  const soft = mixHex(base, "#ffffff", 0.38);
-  const deep = mixHex(base, "#111827", 0.3);
-  const lowStart = mixHex(base, "#111217", 0.62);
-  const lowEnd = mixHex(base, "#050507", 0.82);
-  const panel = mixHex(base, "#07070a", 0.84);
-  const panelStrong = mixHex(base, "#08080c", 0.78);
-  const [r, g, b] = hexRgb(base);
-  const [sr, sg, sb] = hexRgb(soft);
-  const [dr, dg, db] = hexRgb(deep);
-  const [pr, pg, pb] = hexRgb(panel);
-  const [psr, psg, psb] = hexRgb(panelStrong);
-  const values = {
-    "--orange": base,
-    "--orange-2": soft,
-    "--accent-rgb": `${r}, ${g}, ${b}`,
-    "--accent-rgb-soft": `${sr}, ${sg}, ${sb}`,
-    "--accent-rgb-deep": `${dr}, ${dg}, ${db}`,
-    "--line-strong": `rgba(${r}, ${g}, ${b}, 0.42)`,
-    "--accent-status-text": soft,
-    "--accent-status-border": `rgba(${r}, ${g}, ${b}, 0.46)`,
-    "--accent-status-surface": `rgba(${r}, ${g}, ${b}, 0.12)`,
-    "--accent-notice-surface": `rgba(${r}, ${g}, ${b}, 0.09)`,
-    "--accent-hot-start": soft,
-    "--accent-hot-end": base,
-    "--accent-hot-border": `rgba(${sr}, ${sg}, ${sb}, 0.76)`,
-    "--accent-muted-surface": `rgba(${r}, ${g}, ${b}, 0.2)`,
-    "--accent-muted-border": `rgba(${r}, ${g}, ${b}, 0.44)`,
-    "--accent-rank-low-start": lowStart,
-    "--accent-rank-low-end": lowEnd,
-    "--accent-rank-low-border": `rgba(${r}, ${g}, ${b}, 0.64)`,
-    "--bg-mid": mixHex(base, "#08080b", 0.86),
-    "--bg-end": mixHex(base, "#030305", 0.93),
-    "--glass-panel": `rgba(${pr}, ${pg}, ${pb}, 0.58)`,
-    "--glass-panel-strong": `rgba(${psr}, ${psg}, ${psb}, 0.72)`,
-    "--glass-control": `rgba(${r}, ${g}, ${b}, 0.075)`,
-    "--glass-highlight": `rgba(${sr}, ${sg}, ${sb}, 0.13)`,
-  };
-  Object.entries(values).forEach(([property, propertyValue]) => root.setProperty(property, propertyValue));
-}
-
-function clearCustomTheme() {
-  const root = document.documentElement.style;
-  CUSTOM_THEME_PROPERTIES.forEach((property) => root.removeProperty(property));
 }
 
 async function api(path, options = {}) {
@@ -402,6 +323,7 @@ function normalizeData(next) {
     sliver.fiveEAliases = [...aliases];
   }
   next.matchRecords = next.matchRecords || [];
+  next.trainingDefinition = next.trainingDefinition || { id: "default-b-3", totalMin: 3, mode: "B", groupMin: 3 };
   const liveMatchIds = new Set(next.matchRecords.map((match) => match.id || match.matchId).filter(Boolean));
   selectedMatchIds = new Set([...selectedMatchIds].filter((id) => liveMatchIds.has(id)));
   return next;
@@ -523,7 +445,7 @@ function isObserver(user) {
 }
 
 function isTrainingEligible(user) {
-  return !!user && !isObserver(user);
+  return !!user;
 }
 
 function activeMembers() {
@@ -742,6 +664,7 @@ function render() {
       </section>
     </div>
     ${selectedMatchId ? renderMatchDetail(selectedMatchId) : ""}
+    ${selectedAnnouncementId ? renderAnnouncementDetail(selectedAnnouncementId, user) : ""}
     ${renderBusyOverlay()}
   `;
 }
@@ -885,6 +808,7 @@ function renderMatches() {
     : `<div class="empty">${selectedMember ? `暂无包含 ${escapeHtml(selectedMember.gameId)} 的对局记录。` : "暂无对局记录。请先给成员填写 5E 个人主页链接，然后点击一键同步。"}</div>`;
   return `
     <div class="section">
+      ${renderTrainingDefinition(admin)}
       <div class="panel">
         <div class="panel-head">
           <h3>对局记录</h3>
@@ -929,17 +853,36 @@ function renderMatches() {
   `;
 }
 
+function renderTrainingDefinition(canEdit) {
+  const rule = data.trainingDefinition || INITIAL_DATA.trainingDefinition;
+  return `
+    <div class="panel training-definition-panel">
+      <div class="panel-head"><h3>赛训定义</h3><span class="chip">仅对未来新同步的对局生效</span></div>
+      <div class="panel-body">
+        ${canEdit ? `
+        <form class="training-definition-form" data-form="training-definition">
+          <label class="field"><span>包含OG成员数 ≥</span><input name="totalMin" type="number" inputmode="numeric" min="0" max="10" step="1" value="${Number(rule.totalMin ?? 3)}" required /></label>
+          <div class="training-definition-choices" role="radiogroup" aria-label="计入成员范围">
+            <div class="training-definition-choice"><label><input name="mode" type="radio" value="A" ${rule.mode === "A" ? "checked" : ""} /><span>A · 包含教练员、特级及一般运动员的人数 ≥</span></label><input name="groupMinA" type="number" inputmode="numeric" min="0" max="10" step="1" value="${rule.mode === "A" ? Number(rule.groupMin ?? 3) : 3}" ${rule.mode === "A" ? "required" : "disabled"} /></div>
+            <div class="training-definition-choice"><label><input name="mode" type="radio" value="B" ${rule.mode !== "A" ? "checked" : ""} /><span>B · 包含教练员、特级及一般运动员、特邀运动员的人数 ≥</span></label><input name="groupMinB" type="number" inputmode="numeric" min="0" max="10" step="1" value="${rule.mode !== "A" ? Number(rule.groupMin ?? 3) : 3}" ${rule.mode !== "A" ? "required" : "disabled"} /></div>
+          </div>
+          <button class="primary" type="submit">保存定义</button>
+        </form>` : `<div class="training-definition-readonly"><span>包含OG成员数 ≥ ${Number(rule.totalMin ?? 3)}</span><span>${rule.mode === "A" ? "A · 教练员、特级及一般运动员" : "B · 教练员、特级及一般运动员、特邀运动员"}人数 ≥ ${Number(rule.groupMin ?? 3)}</span></div>`}
+      </div>
+    </div>
+  `;
+}
+
 function renderColorStylePicker() {
-  const mode = ["azure", "custom"].includes(preferences.colorTheme) ? preferences.colorTheme : "orange";
-  const modeLabel = mode === "azure" ? t("dark") : mode === "custom" ? "自定义" : t("theme");
-  const customColor = normalizeHexColor(preferences.customAccent, "#8b5cf6");
+  const mode = preferences.colorTheme === "azure" ? "azure" : "orange";
+  const modeLabel = mode === "azure" ? t("dark") : t("theme");
   return `
     <div class="color-style-picker">
       <button class="color-style-trigger" data-action="toggle-color-menu" type="button" aria-haspopup="dialog" aria-expanded="${tabs.colorMenuOpen}">
         ${navIcon("palette")}
         <span>${t("themeSwitch")}</span>
         <strong>${escapeHtml(modeLabel)}</strong>
-        <span class="color-style-preview ${mode}" style="${mode === "custom" ? `--preview-color:${customColor}` : ""}"></span>
+        <span class="color-style-preview ${mode}"></span>
       </button>
       ${tabs.colorMenuOpen ? `
         <div class="color-style-popover" role="dialog" aria-label="${t("themeSwitch")}">
@@ -953,10 +896,6 @@ function renderColorStylePicker() {
           <button class="color-style-option ${mode === "azure" ? "active" : ""}" data-action="set-color-theme" data-theme="azure" type="button">
             <span class="color-option-swatch azure"></span><span>蔚蓝</span>${mode === "azure" ? "<b>当前</b>" : ""}
           </button>
-          <label class="color-style-option color-custom-option ${mode === "custom" ? "active" : ""}">
-            <input class="custom-color-input" data-action="pick-custom-color" type="color" value="${customColor}" aria-label="自定义主题颜色" />
-            <span>自定义颜色</span><code>${customColor.toUpperCase()}</code>
-          </label>
         </div>
       ` : ""}
     </div>
@@ -1203,6 +1142,7 @@ function renderDashboard() {
         </div>
         <div class="panel-body">${renderRanking("count", tabs.count)}</div>
       </div>
+      <label class="dashboard-rank-filter"><input type="checkbox" data-action="dashboard-core-only" ${tabs.dashboardCoreOnly ? "checked" : ""} /><span>屏蔽特邀运动员及观察员</span></label>
       <div class="grid three">${metricCards}</div>
     </div>
   `;
@@ -1327,7 +1267,10 @@ function rankingRows(metric, scope) {
   const since = new Date();
   since.setDate(since.getDate() - 13);
   const sinceStamp = dateValue(since.toISOString().slice(0, 10));
-  const rows = activeMembers().map((user) => {
+  const members = tabs.dashboardCoreOnly
+    ? activeMembers().filter((user) => ["总教练", "常务副总教练", "特级运动员", "一般运动员"].includes(user.role))
+    : activeMembers();
+  const rows = members.map((user) => {
     let records = userTrainingRecords(user.identityCode);
     if (metric === "count") {
       if (scope === "season" && season) records = records.filter((record) => record.seasonId === season.id);
@@ -1356,8 +1299,10 @@ function formatRankValue(metric, value) {
 }
 
 function renderTeam(user) {
-  const showingObservers = tabs.teamGroup === "observers";
-  const members = showingObservers ? sortMembersForTeam(observerMembers()) : sortMembersForTeam(activeMembers());
+  const group = ["core", "invited", "observers"].includes(tabs.teamGroup) ? tabs.teamGroup : "core";
+  const members = sortMembersForTeam(data.users.filter((member) => group === "core"
+    ? ["总教练", "常务副总教练", "特级运动员", "一般运动员"].includes(member.role)
+    : group === "invited" ? member.role === "特邀运动员" : isObserver(member)));
   return `
     <div class="section">
       <div class="panel">
@@ -1367,12 +1312,13 @@ function renderTeam(user) {
         </div>
         <div class="panel-body team-tabs">
           <div class="tabs">
-            <button class="${!showingObservers ? "active" : ""}" data-action="team-group" data-group="active" type="button">教练员及运动员</button>
-            <button class="${showingObservers ? "active" : ""}" data-action="team-group" data-group="observers" type="button">观察员</button>
+            <button class="${group === "core" ? "active" : ""}" data-action="team-group" data-group="core" type="button">教练员、特级及一般运动员</button>
+            <button class="${group === "invited" ? "active" : ""}" data-action="team-group" data-group="invited" type="button">特邀运动员</button>
+            <button class="${group === "observers" ? "active" : ""}" data-action="team-group" data-group="observers" type="button">观察员</button>
           </div>
         </div>
         <div class="panel-body team-grid">
-          ${members.length ? members.map((member) => renderTeamCard(member, "")).join("") : `<div class="empty">暂无${showingObservers ? "观察员" : "成员"}。</div>`}
+          ${members.length ? members.map((member) => renderTeamCard(member, "")).join("") : `<div class="empty">暂无成员。</div>`}
         </div>
       </div>
     </div>
@@ -1382,7 +1328,7 @@ function renderTeam(user) {
 function renderTeamCard(member, selectedCode) {
   const stats = memberStats(member.identityCode);
   return `
-    <button class="member-card ${member.identityCode === selectedCode ? "active" : ""} ${isObserver(member) ? "is-observer" : ""}" ${isObserver(member) ? "" : `data-action="open-member" data-code="${member.identityCode}"`}>
+    <button class="member-card ${member.identityCode === selectedCode ? "active" : ""}" data-action="open-member" data-code="${member.identityCode}">
       ${avatarMarkup(member)}
       <span class="identity">${escapeHtml(member.gameId)}</span>
       <span class="meta">${escapeHtml(member.name)} · ${escapeHtml(member.role)} · ${escapeHtml(member.identityCode)}</span>
@@ -1432,7 +1378,6 @@ function renderMemberHome(member, viewer) {
 
 function renderMemberPage(viewer) {
   const member = userByCode(tabs.teamUser) || viewer;
-  if (isObserver(member)) return renderTeam(viewer);
   return `
     <div class="section">
       <div class="panel">
@@ -1689,7 +1634,6 @@ function formatPercent(value) {
 }
 
 function renderRecords(user) {
-  if (isObserver(user)) return noAccess();
   const admin = isAdmin(user);
   const season = selectedTrainingSeason();
   const visibleRecords = trainingRecordsForSeason(user, season);
@@ -1777,22 +1721,8 @@ function renderTrainingAutoFill(season) {
     <div class="panel compact-work-panel">
       <div class="panel-head">
         <h3>${escapeHtml(season.name)} · 自动填报</h3>
-        <div class="inline-actions">
-          <button class="primary" data-action="quick-promote-training" type="button">同步</button>
-          <button class="ghost" data-action="toggle-auto-training" type="button">${tabs.autoTrainingOpen ? "收起" : "展开设置"}</button>
-        </div>
+        <button class="primary" data-action="quick-promote-training" type="button">同步</button>
       </div>
-      ${tabs.autoTrainingOpen ? `<div class="panel-body">
-        <form class="form-grid" data-form="promote-training">
-          <input type="hidden" name="seasonId" value="${escapeHtml(season.id)}" />
-          <div class="grid three">
-            <div class="field"><label>开始日期</label><input name="start" type="date" value="${escapeHtml(season.start)}" required /></div>
-            <div class="field"><label>结束日期</label><input name="end" type="date" value="${escapeHtml(season.end)}" required /></div>
-            <div class="field"><label>最少成员数</label><input name="minMembers" type="number" min="3" step="1" value="3" required /></div>
-          </div>
-          <button class="primary" type="submit">从本赛季对局记录自动填报赛训</button>
-        </form>
-      </div>` : ""}
     </div>
   `;
 }
@@ -2260,36 +2190,52 @@ function renderNetwork(user) {
 
 function renderAnnouncementList(admin, viewer = currentUser()) {
   if (!data.announcements.length) return `<div class="empty">${t("emptyData")}</div>`;
-  return data.announcements
+  const cards = data.announcements
     .slice()
-    .sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || b.createdAt.localeCompare(a.createdAt))
+    .sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
     .map((item) => {
       const author = userByCode(item.createdBy);
-      const readBy = item.readBy || [];
-      const isRead = viewer ? readBy.includes(viewer.identityCode) : false;
-      const unreadUsers = data.users.filter((user) => !readBy.includes(user.identityCode));
+      const isRead = viewer && (item.readBy || []).includes(viewer.identityCode);
+      const excerpt = String(item.body || "").trim().slice(0, 95);
       return `
-        <article class="announcement ${item.pinned ? "is-pinned" : ""}">
-          <div class="panel-head" style="padding:0 0 8px;border:0">
-            <div>
-              <h4>${item.pinned ? `<span class="pinned-badge">置顶</span>` : ""}${escapeHtml(item.title)}</h4>
-              <div class="date-line">${formatDateTime(item.createdAt)} · ${author ? escapeHtml(author.gameId) : escapeHtml(item.createdBy)}</div>
-            </div>
-            ${admin ? `<div class="inline-actions">
-              <button class="ghost" data-action="pin-announcement" data-id="${escapeHtml(item.id)}" type="button" ${item.pinned ? "disabled" : ""}>${item.pinned ? "已置顶" : "置顶"}</button>
-              <button class="danger" data-action="delete-announcement" data-id="${escapeHtml(item.id)}" type="button">${t("delete")}</button>
-            </div>` : ""}
-          </div>
-          <p>${escapeHtml(item.body).replaceAll("\n", "<br>")}</p>
-          <label class="checkline announcement-read">
-            <input type="checkbox" data-action="toggle-announcement-read" data-id="${escapeHtml(item.id)}" ${isRead ? "checked" : ""} />
-            <span>已读</span>
-          </label>
-          ${admin ? `<div class="announcement-unread"><strong>未读名单：</strong>${unreadUsers.length ? unreadUsers.map((user) => `<span class="mini-badge">${escapeHtml(user.gameId)}</span>`).join("") : `<span class="date-line">全部已读</span>`}</div>` : ""}
-        </article>
+        <button class="announcement-card ${item.pinned ? "is-pinned" : ""}" data-action="open-announcement" data-id="${escapeHtml(item.id)}" type="button">
+          <span class="announcement-card-top">${item.pinned ? `<span class="pinned-badge">置顶</span>` : ""}<span class="announcement-state ${isRead ? "read" : "unread"}">${isRead ? "已读" : "未读"}</span></span>
+          <strong>${escapeHtml(item.title)}</strong>
+          <span class="announcement-excerpt">${escapeHtml(excerpt)}${String(item.body || "").trim().length > 95 ? "…" : ""}</span>
+          <span class="date-line">${formatDateTime(item.createdAt)} · ${author ? escapeHtml(author.gameId) : escapeHtml(item.createdBy)}</span>
+        </button>
       `;
     })
     .join("");
+  return `<div class="announcement-card-grid">${cards}</div>`;
+}
+
+function renderAnnouncementDetail(id, viewer) {
+  const item = data.announcements.find((entry) => entry.id === id);
+  if (!item) return "";
+  const admin = isAdmin(viewer);
+  const author = userByCode(item.createdBy);
+  const readBy = item.readBy || [];
+  const unreadUsers = data.users.filter((user) => !readBy.includes(user.identityCode));
+  return `
+    <div class="modal-backdrop" data-action="close-announcement">
+      <div class="announcement-modal" role="dialog" aria-modal="true" aria-labelledby="announcement-title">
+        <div class="panel-head">
+          <div>
+            <h3 id="announcement-title">${item.pinned ? `<span class="pinned-badge">置顶</span>` : ""}${escapeHtml(item.title)}</h3>
+            <div class="date-line">${formatDateTime(item.createdAt)} · ${author ? escapeHtml(author.gameId) : escapeHtml(item.createdBy)}</div>
+          </div>
+          <button class="icon-button" data-action="close-announcement" type="button" aria-label="关闭">×</button>
+        </div>
+        <div class="announcement-modal-body">
+          <p>${escapeHtml(item.body).replaceAll("\n", "<br>")}</p>
+          <label class="checkline announcement-read"><input type="checkbox" data-action="toggle-announcement-read" data-id="${escapeHtml(item.id)}" ${readBy.includes(viewer.identityCode) ? "checked" : ""} /><span>已读</span></label>
+          ${admin ? `<div class="announcement-unread"><strong>未读名单：</strong>${unreadUsers.length ? unreadUsers.map((user) => `<span class="mini-badge">${escapeHtml(user.gameId)}</span>`).join("") : `<span class="date-line">全部已读</span>`}</div>
+            <div class="inline-actions"><button class="ghost" data-action="pin-announcement" data-id="${escapeHtml(item.id)}" type="button" ${item.pinned ? "disabled" : ""}>${item.pinned ? "已置顶" : "置顶"}</button><button class="danger" data-action="delete-announcement" data-id="${escapeHtml(item.id)}" type="button">${t("delete")}</button></div>` : ""}
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 document.addEventListener("submit", async (event) => {
@@ -2299,7 +2245,7 @@ document.addEventListener("submit", async (event) => {
   const name = form.dataset.form;
   if (name === "login") await handleLogin(form);
   if (name === "record") await handleRecord(form);
-  if (name === "promote-training") await promoteTraining(form);
+  if (name === "training-definition") await saveTrainingDefinition(form);
   if (name === "season") await handleSeason(form);
   if (name === "register") await handleRegister(form);
   if (name === "profile") await handleProfile(form);
@@ -2324,6 +2270,7 @@ document.addEventListener("click", async (event) => {
     view = button.dataset.view;
     sidebarOpen = false;
     selectedMatchId = "";
+    selectedAnnouncementId = "";
     render();
   }
   if (action === "toggle-nav") {
@@ -2341,6 +2288,7 @@ document.addEventListener("click", async (event) => {
     authToken = "";
     localStorage.removeItem(SESSION_KEY);
     localStorage.removeItem(TOKEN_KEY);
+    selectedAnnouncementId = "";
     render();
   }
   if (action === "toggle-color-menu") {
@@ -2370,7 +2318,7 @@ document.addEventListener("click", async (event) => {
   }
   if (action === "open-member") {
     const member = userByCode(button.dataset.code);
-    if (!member || isObserver(member)) return;
+    if (!member) return;
     tabs.teamUser = button.dataset.code;
     view = "member";
     selectedMatchId = "";
@@ -2394,10 +2342,6 @@ document.addEventListener("click", async (event) => {
   }
   if (action === "toggle-manual-record") {
     tabs.manualRecordOpen = !tabs.manualRecordOpen;
-    render();
-  }
-  if (action === "toggle-auto-training") {
-    tabs.autoTrainingOpen = !tabs.autoTrainingOpen;
     render();
   }
   if (action === "toggle-season-settings") {
@@ -2425,6 +2369,15 @@ document.addEventListener("click", async (event) => {
   if (action === "resync-match") await resyncMatch(button.dataset.id);
   if (action === "delete-selected-matches") await deleteSelectedMatches();
   if (action === "open-match-detail") await openMatchDetail(button.dataset.id);
+  if (action === "open-announcement") {
+    selectedAnnouncementId = button.dataset.id;
+    render();
+  }
+  if (action === "close-announcement") {
+    if (button.classList.contains("modal-backdrop") && event.target !== button) return;
+    selectedAnnouncementId = "";
+    render();
+  }
   if (action === "match-detail-scope") {
     selectedMatchScope = button.dataset.scope || "full";
     render();
@@ -2484,12 +2437,16 @@ document.addEventListener("change", (event) => {
     tabs.medalAnnouncementUser = target.value;
     render();
   }
-  if (target.dataset.action === "pick-custom-color") {
-    preferences.customAccent = normalizeHexColor(target.value, "#8b5cf6");
-    preferences.colorTheme = "custom";
-    tabs.colorMenuOpen = false;
-    savePreferences();
+  if (target.dataset.action === "dashboard-core-only") {
+    tabs.dashboardCoreOnly = target.checked;
     render();
+  }
+  if (target.name === "mode" && target.closest("[data-form='training-definition']")) {
+    for (const mode of ["A", "B"]) {
+      const input = target.form.elements.namedItem(`groupMin${mode}`);
+      input.disabled = target.value !== mode;
+      input.required = target.value === mode;
+    }
   }
   if (target.dataset.action === "toggle-match-select") {
     const id = target.dataset.id;
@@ -2568,7 +2525,7 @@ async function handleRecord(form) {
   const target = isAdmin(user) && formData.get("userIdentityCode")
     ? String(formData.get("userIdentityCode"))
     : form.dataset.target || user.identityCode;
-  if (!isTrainingEligible(userByCode(target))) return alert("观察员不可以填报至训练填报。");
+  if (!isTrainingEligible(userByCode(target))) return alert("请选择有效成员。");
   const date = String(formData.get("date"));
   const season = findSeasonForDate(date);
   data.records.push({
@@ -2589,12 +2546,11 @@ async function handleRecord(form) {
 }
 
 async function promoteTraining(form, seasonOverride = null) {
-  const formData = form ? new FormData(form) : null;
-  const season = seasonOverride || (formData?.get("seasonId") ? data.seasons.find((item) => item.id === String(formData.get("seasonId"))) : selectedTrainingSeason());
+  const season = seasonOverride || selectedTrainingSeason();
   startBusyTask("正在自动填报赛训", [
     `正在检查 ${season?.name || "当前赛季"} 的时间范围。`,
     "OG_Elfie 正在判断这场算不算集体行动。",
-    "OG_765 正在数人头：够三个人才算赛训。",
+    "OG_765 正在核对赛训候选与完善状态。",
     "OG_WiFi 正在把同场队友串起来。",
     "SilverBullet 正在把重复记录一发带走。",
     "Borchy 正在确认地图和比分没有串台。",
@@ -2604,18 +2560,13 @@ async function promoteTraining(form, seasonOverride = null) {
   try {
     const body = await api("/api/promote-training", {
       method: "POST",
-      body: JSON.stringify({
-        start: String(formData?.get("start") || season?.start || todayText()),
-        end: String(formData?.get("end") || season?.end || todayText()),
-        seasonId: String(formData?.get("seasonId") || season?.id || ""),
-        minMembers: Number(formData?.get("minMembers") || 3),
-      }),
+      body: JSON.stringify({ seasonId: season?.id || "" }),
     });
     data = normalizeData(body.state);
     tabs.trainingRecordPage = 1;
     syncStatus = "";
     stopBusyTask(false);
-    alert(`赛训自动填报完成：找到 ${body.promotedMatches} 场共同对局，标记 ${body.promotedRecords} 条成员记录。`);
+    alert(`赛训自动填报完成：找到 ${body.promotedMatches} 场已完善赛训候选对局，新增 ${body.promotedRecords} 条成员记录。`);
   } catch (error) {
     syncStatus = error.message;
     stopBusyTask(false);
@@ -2817,6 +2768,23 @@ async function sync5e(identityCode) {
     stopBusyTask(false);
     alert(`5E 最近战绩同步失败：${error.message}`);
   }
+  render();
+}
+
+async function saveTrainingDefinition(form) {
+  if (!isAdmin()) return;
+  const fields = new FormData(form);
+  const mode = fields.get("mode") === "A" ? "A" : "B";
+  const totalMin = Number(fields.get("totalMin"));
+  const groupMin = Number(fields.get(`groupMin${mode}`));
+  if (![totalMin, groupMin].every((value) => Number.isInteger(value) && value >= 0 && value <= 10)) {
+    alert("请填写 0 至 10 的整数。");
+    return;
+  }
+  const current = data.trainingDefinition || INITIAL_DATA.trainingDefinition;
+  if (current.totalMin === totalMin && current.mode === mode && current.groupMin === groupMin) return;
+  data.trainingDefinition = { id: cryptoId(), totalMin, mode, groupMin };
+  await saveData();
   render();
 }
 
@@ -3086,6 +3054,7 @@ async function handleAnnouncement(form) {
 function deleteAnnouncement(id) {
   if (!isAdmin()) return alert("只有拥有全体管理权限的用户可以删除公告。");
   data.announcements = data.announcements.filter((item) => item.id !== id);
+  if (selectedAnnouncementId === id) selectedAnnouncementId = "";
   saveData();
   render();
 }

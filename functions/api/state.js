@@ -1,4 +1,4 @@
-import { ensureSchema, isAdmin, json, readMatchCatalog, readState, userFromRequest, writeMatchCatalog, writeMatchDetail, writeState, writeSyncContext } from "./_utils.js";
+import { ensureSchema, isAdmin, json, readMatchCatalog, readState, stripRetiredObservers, userFromRequest, writeMatchCatalog, writeMatchDetail, writeState, writeSyncContext } from "./_utils.js";
 
 function catalogSummary(match) {
   const { players, ctPlayers, tPlayers, ...summary } = match;
@@ -131,6 +131,8 @@ function hasOnlyOwnRecordChanges(previousItems = [], nextItems = [], identityCod
 
 function hasOnlyAllowedNonAdminChanges(previousState, nextState, identityCode) {
   return hasOnlyAllowedUserChanges(previousState?.users, nextState?.users, identityCode)
+    && sameValue(previousState?.trainingDefinition || null, nextState?.trainingDefinition || null)
+    && sameValue(previousState?.legacyObserverCleanupV12, nextState?.legacyObserverCleanupV12)
     && sameValue(previousState?.seasons || [], nextState?.seasons || [])
     && sameValue(previousState?.matchRecords || [], nextState?.matchRecords || [])
     && sameValue(previousState?.medalAnnouncements || [], nextState?.medalAnnouncements || [])
@@ -150,6 +152,7 @@ export async function onRequestGet({ request, env }) {
 
     const state = await readState(env.DB);
     if (!state) return json({ error: "数据库还没有初始化，请先登录一次。" }, 404);
+    if (!state.users.some((user) => user.identityCode === session.identity_code)) return json({ error: "请重新登录。" }, 401);
     mergeCatalog(state, await readMatchCatalog(env.DB));
     return json({ state, identityCode: session.identity_code });
   } catch (error) {
@@ -175,6 +178,8 @@ export async function onRequestPut({ request, env }) {
       return json({ error: "普通成员只能修改自己的资料与训练记录，并标记公告已读。" }, 403);
     }
 
+    stripRetiredObservers(body.state);
+    body.state.legacyObserverCleanupV12 = true;
     await persistAndCompactMatchDetails(env.DB, body.state);
     await writeMatchCatalog(env.DB, (body.state.matchRecords || []).map(catalogSummary));
     await writeSyncContext(env.DB, body.state);

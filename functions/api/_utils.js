@@ -1,5 +1,6 @@
 const STATE_KEY = "platform";
 const CHUNK_SIZE = 180_000;
+const RETIRED_CODES = new Set(["G1", "G2", "G3"]);
 
 export function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -34,7 +35,10 @@ export async function ensureSchema(db) {
 
 export async function readSyncContext(db) {
   const row = await db.prepare("SELECT payload FROM sync_context WHERE id = ?").bind(STATE_KEY).first();
-  return row?.payload ? JSON.parse(row.payload) : null;
+  if (!row?.payload) return null;
+  const context = JSON.parse(row.payload);
+  context.users = (context.users || []).filter((user) => !RETIRED_CODES.has(user.identityCode));
+  return context;
 }
 
 export async function writeSyncContext(db, state) {
@@ -54,6 +58,7 @@ export async function writeSyncContext(db, state) {
       start: season.start,
       end: season.end,
     })),
+    trainingDefinition: state?.trainingDefinition,
   });
   const updatedAt = new Date().toISOString();
   await db.prepare(`
@@ -141,11 +146,33 @@ export async function readState(db) {
     .bind(STATE_KEY)
     .all();
   if (chunks.results?.length) {
-    return JSON.parse(chunks.results.map((row) => row.payload).join(""));
+    return migrateRetiredObservers(db, JSON.parse(chunks.results.map((row) => row.payload).join("")));
   }
 
   const row = await db.prepare("SELECT payload FROM app_state WHERE id = ?").bind(STATE_KEY).first();
-  return row ? JSON.parse(row.payload) : null;
+  return row ? migrateRetiredObservers(db, JSON.parse(row.payload)) : null;
+}
+
+async function migrateRetiredObservers(db, state) {
+  if (state.legacyObserverCleanupV12 === true) return state;
+  stripRetiredObservers(state);
+  state.legacyObserverCleanupV12 = true;
+  await db.prepare("DELETE FROM sessions WHERE identity_code IN ('G1', 'G2', 'G3')").run();
+  await writeSyncContext(db, state);
+  await writeState(db, state);
+  return state;
+}
+
+export function stripRetiredObservers(state) {
+  state.users = (state.users || []).filter((user) => !RETIRED_CODES.has(user.identityCode));
+  state.records = (state.records || []).filter((record) => !RETIRED_CODES.has(record.userIdentityCode));
+  state.medals = (state.medals || []).filter((medal) => !RETIRED_CODES.has(medal.userIdentityCode));
+  state.medalAnnouncements = (state.medalAnnouncements || []).filter((item) => !RETIRED_CODES.has(item.userIdentityCode));
+  state.announcements = (state.announcements || []).map((item) => ({
+    ...item,
+    readBy: (item.readBy || []).filter((code) => !RETIRED_CODES.has(code)),
+  }));
+  return state;
 }
 
 export async function writeState(db, state) {
@@ -183,7 +210,12 @@ export async function userFromRequest(request, db) {
   const header = request.headers.get("authorization") || "";
   const token = header.startsWith("Bearer ") ? header.slice(7) : "";
   if (!token) return null;
-  return db.prepare("SELECT identity_code FROM sessions WHERE token = ?").bind(token).first();
+  const session = await db.prepare("SELECT identity_code FROM sessions WHERE token = ?").bind(token).first();
+  if (session && RETIRED_CODES.has(session.identity_code)) {
+    await db.prepare("DELETE FROM sessions WHERE token = ?").bind(token).run();
+    return null;
+  }
+  return session;
 }
 
 export function isAdmin(user) {

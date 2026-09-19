@@ -1,6 +1,6 @@
 import { deleteMatchCatalog, deleteMatchDetails, ensureSchema, isAdmin, json, readMatchCatalog, readState, userFromRequest, writeState } from "./_utils.js";
 
-const SYNC_VERSION = "11.0 Color";
+const SYNC_VERSION = "12.0 Win";
 
 function collectRequestKeys(body) {
   const keys = new Set();
